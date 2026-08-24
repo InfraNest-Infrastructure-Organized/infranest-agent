@@ -44,12 +44,12 @@ is the first thing documented rather than a debugging flag buried at the bottom.
 | | |
 |---|---|
 | **CPU** | user + system time, as a percentage. Deliberately **not** `100 - idle`, which counts steal (CPU the hypervisor gave another tenant) and iowait — on a shared vCPU those are most of a false alarm, and neither is load this machine can do anything about |
-| **Memory** | used, cached, swap |
+| **Memory** | used and total, plus swap. "Used" is total minus `MemAvailable`, not minus `MemFree` — counting the page cache as used makes a healthy Linux box look permanently full |
 | **Disk space** | per mount: device, mount point, used, total |
 | **Load average** | 1 / 5 / 15 minute |
 | **Uptime** | seconds since boot |
-| **Processes** | the busiest few, by CPU and memory. **Arguments are redacted by default** — command lines routinely carry credentials |
-| **Services** | the state of watched systemd units |
+| **Processes** | the largest few by memory, off by default. Sorted by memory rather than CPU because a CPU share needs two readings per process, which means walking all of `/proc` twice. **Arguments are omitted** — command lines routinely carry credentials, so the executable name is what gets sent unless you ask otherwise |
+| **Services** | the state of watched systemd units — *not implemented yet* |
 
 Memory, disk space, load average and processes cannot be read from a cloud provider's API at all. They are
 the reason this exists: a full disk and an out-of-memory kill are what actually take a server down, and no
@@ -119,6 +119,18 @@ go test ./...
 ```
 
 No third-party dependencies. Everything here is the Go standard library, so the only supply chain is Go's.
+
+## InfraNest
+
+This agent is one piece of [InfraNest](https://infranest.app) — domains, DNS, cloud servers, certificates
+and uptime monitoring in one place, across every provider.
+
+- **[infranest.app](https://infranest.app)** — what the platform does
+- **[infranest.app/docs](https://infranest.app/docs/)** — documentation and help centre
+- **[dashboard.infranest.app](https://dashboard.infranest.app)** — sign in
+
+You do not need an InfraNest account to read this code, and the agent is useful to look at either way: it
+is a small, dependency-free example of reading `/proc` and `statfs` from Go.
 
 ## Licence
 

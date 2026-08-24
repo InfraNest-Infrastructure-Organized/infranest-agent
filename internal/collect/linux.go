@@ -135,6 +135,18 @@ func readUptime() (int64, error) {
 }
 
 // readMounts reports the real filesystems, skipping the ones nobody can fill.
+//
+// Each mount is measured in its own goroutine behind a deadline, which is not defensive programming for
+// its own sake: `statfs` on a hard-mounted NFS or CIFS share whose server has gone away does not return an
+// error, it blocks in uninterruptible sleep, forever. Measured inline, one dead share would hang the whole
+// collection — no CPU, no memory, no other mount — and every metric on the machine would go dark because
+// of a filesystem nobody was even alerting on. The agent going quiet then looks exactly like the server
+// dying, which is the alert this product sells.
+//
+// A goroutine stuck in a syscall cannot be cancelled, so the ones that never return are abandoned rather
+// than waited for. That leaks a goroutine per dead mount per cycle, which is why `mountsSeen` remembers
+// them: a share that timed out once is skipped from then on, so the leak is bounded by the number of
+// broken mounts rather than growing with every sample.
 func readMounts() ([]Mount, error) {
 	f, err := os.Open("/proc/self/mounts")
 	if err != nil {
@@ -147,43 +159,60 @@ func readMounts() ([]Mount, error) {
 		return nil, err
 	}
 
-	out := make([]Mount, 0, len(entries))
+	live := make([]mountEntry, 0, len(entries))
 	for _, e := range entries {
-		// A bind-mounted *file* is not a filesystem anyone can fill — it reports the statfs of whatever
-		// holds it. Docker mounts /etc/hosts, /etc/hostname and /etc/resolv.conf this way, so without
-		// this check a container reports the host's disk once per file.
-		if info, err := os.Stat(e.point); err != nil || !info.IsDir() {
+		if unresponsiveMounts.blocked(e.point) {
 			continue
 		}
+		live = append(live, e)
+	}
 
-		var st syscall.Statfs_t
-		if err := syscall.Statfs(e.point, &st); err != nil {
-			// A mount we cannot stat — an unreachable network filesystem, or one that vanished between
-			// reading the list and asking about it. Skip it rather than fail the collector: the other
-			// mounts are still worth reporting, and a full disk elsewhere still needs to alert.
-			continue
-		}
-
-		blockSize := int64(st.Bsize)
-		total := int64(st.Blocks) * blockSize
-		if total <= 0 {
-			continue
-		}
-
-		// Free-for-unprivileged, not total-free: the reserved blocks root keeps back are not space
-		// anything else can use, so counting them as free understates how full the disk is to everyone
-		// who is not root — which is everyone who will hit the wall first.
-		avail := int64(st.Bavail) * blockSize
-
-		out = append(out, Mount{
-			MountPoint: e.point,
-			Device:     e.device,
-			TotalBytes: total,
-			UsedBytes:  total - avail,
-		})
+	out, unanswered := probeMounts(live, statMount, mountTimeout)
+	for _, point := range unanswered {
+		// Remember it, so the next cycle does not start another goroutine against the same dead share.
+		// A goroutine blocked in a syscall cannot be cancelled, so this is what bounds the leak to the
+		// number of broken mounts rather than letting it grow with every sample.
+		unresponsiveMounts.block(point)
 	}
 
 	return dedupeMounts(out), nil
+}
+
+// statMount measures one filesystem. Returns false for anything that is not a fillable disk.
+//
+// os.Stat is inside here with the statfs on purpose: on a hard-mounted share whose server has gone away,
+// os.Stat blocks in uninterruptible sleep exactly as statfs does, so leaving it outside the timeout would
+// reintroduce the hang this whole structure exists to prevent.
+func statMount(e mountEntry) (Mount, bool) {
+	// A bind-mounted *file* is not a filesystem anyone can fill — it reports the statfs of whatever holds
+	// it. Docker mounts /etc/hosts, /etc/hostname and /etc/resolv.conf this way, so without this check a
+	// container reports the host's disk once per file.
+	if info, err := os.Stat(e.point); err != nil || !info.IsDir() {
+		return Mount{}, false
+	}
+
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(e.point, &st); err != nil {
+		return Mount{}, false
+	}
+
+	blockSize := int64(st.Bsize)
+	total := int64(st.Blocks) * blockSize
+	if total <= 0 {
+		return Mount{}, false
+	}
+
+	// Free-for-unprivileged, not total-free: the blocks reserved for root are not space anything else can
+	// use, so counting them as free understates how full the disk is to everyone who is not root — which
+	// is everyone who will hit the wall first.
+	avail := int64(st.Bavail) * blockSize
+
+	return Mount{
+		MountPoint: e.point,
+		Device:     e.device,
+		TotalBytes: total,
+		UsedBytes:  total - avail,
+	}, true
 }
 
 // readProcesses walks /proc for the busiest few.

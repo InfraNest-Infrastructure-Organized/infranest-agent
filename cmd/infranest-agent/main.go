@@ -8,9 +8,11 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/collect"
@@ -36,11 +38,23 @@ func main() {
 func run(args []string, stdout, stderr *os.File) error {
 	fs := flag.NewFlagSet("infranest-agent", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	fs.Usage = func() { usage(stdout) }
 	showVersion := fs.Bool("version", false, "print version information and exit")
 	withProcesses := fs.Bool("processes", false, "include the top processes by memory")
 	withArgs := fs.Bool("process-args", false, "include full command lines — these often contain credentials")
 
-	if err := fs.Parse(args); err != nil {
+	// Go's flag package stops parsing at the first non-flag argument, so `print --processes` would leave
+	// the flag unparsed and silently false — the command would succeed, print no processes, and give
+	// nobody a reason why. Pulling the subcommand out first means flags work on either side of it, which
+	// is what anyone typing it will expect.
+	command, rest := splitCommand(args)
+
+	if err := fs.Parse(rest); err != nil {
+		// `--help` is someone asking a question, not getting something wrong: answer it on stdout and
+		// exit 0. flag.ErrHelp arrives here after fs.Usage has already printed.
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 
@@ -49,7 +63,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		return nil
 	}
 
-	switch fs.Arg(0) {
+	switch command {
 	case "", "help":
 		usage(stdout)
 		return nil
@@ -61,8 +75,26 @@ func run(args []string, stdout, stderr *os.File) error {
 			CPUInterval:  300 * time.Millisecond,
 		})
 	default:
-		return fmt.Errorf("unknown command %q — run without arguments for usage", fs.Arg(0))
+		return fmt.Errorf("unknown command %q — run without arguments for usage", command)
 	}
+}
+
+// splitCommand pulls the first non-flag argument out, returning it and everything else.
+//
+// This is what lets flags appear on either side of the subcommand. The alternative — telling people to
+// write `--processes print` — is a rule nobody will remember and nothing enforces.
+func splitCommand(args []string) (command string, rest []string) {
+	rest = make([]string, 0, len(args))
+
+	for _, arg := range args {
+		if command == "" && arg != "" && !strings.HasPrefix(arg, "-") {
+			command = arg
+			continue
+		}
+		rest = append(rest, arg)
+	}
+
+	return command, rest
 }
 
 // printSample runs one collection cycle and writes what would be posted, sending nothing.

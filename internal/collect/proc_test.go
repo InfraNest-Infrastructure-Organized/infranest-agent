@@ -152,3 +152,21 @@ func TestParsersRejectRubbish(t *testing.T) {
 		t.Error("parseUptime accepted an empty file")
 	}
 }
+
+func TestCPUPercentRefusesWhenBusyGoesBackwardsButTotalDoesNot(t *testing.T) {
+	// The subtle half of the backwards-counter case, and the dangerous one. A vCPU hot-unplug, or a
+	// kernel whose iowait and steal columns are not monotonic, can drop the busy components while total
+	// still rises. Unsigned subtraction wraps to ~1.8e19, and clamping turns that into exactly 100.0 —
+	// a machine reported as pinned at 100% CPU, with no error and nothing in `failed` to contradict it.
+	before := cpuTimes{user: 100, system: 100}
+	after := cpuTimes{user: 50, system: 50, iowait: 500, steal: 500}
+
+	if after.total() <= before.total() {
+		t.Fatal("test premise wrong: total must still rise for this to be the interesting case")
+	}
+
+	got, err := cpuPercent(before, after)
+	if err == nil {
+		t.Errorf("accepted a wrapped reading and returned %v%%", got)
+	}
+}

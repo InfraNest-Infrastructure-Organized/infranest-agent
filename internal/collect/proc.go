@@ -65,11 +65,17 @@ func parseStat(r io.Reader) (cpuTimes, error) {
 
 // cpuPercent turns two readings into the share of wall time this machine spent busy.
 func cpuPercent(before, after cpuTimes) (float64, error) {
-	total := after.total() - before.total()
-	if after.total() < before.total() {
-		// Counters only go up. A decrease means the machine rebooted between samples, or /proc lied.
+	// Both subtractions are unsigned, and both have to be checked. Guarding only the total left the busy
+	// components free to wrap: a vCPU hot-unplug, or a kernel whose iowait and steal columns are not
+	// monotonic, can drop `busy` while `total` still rises. That wraps to ~1.8e19, which clampPercent
+	// turns into exactly 100.0 — a machine reported as pinned, with no error and nothing in `failed` to
+	// suggest otherwise. Refusing the reading is right: the next one, a few hundred milliseconds later,
+	// will be fine.
+	if after.total() < before.total() || after.busy() < before.busy() {
 		return 0, fmt.Errorf("cpu counters went backwards")
 	}
+
+	total := after.total() - before.total()
 	if total == 0 {
 		return 0, fmt.Errorf("no time elapsed between cpu samples")
 	}

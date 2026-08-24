@@ -32,7 +32,7 @@ var pseudoFilesystems = map[string]bool{
 // parseMounts reads /proc/self/mounts and keeps the filesystems a person could actually fill.
 func parseMounts(r io.Reader) ([]mountEntry, error) {
 	var out []mountEntry
-	seen := map[string]bool{}
+	seen := map[string]int{}
 
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
@@ -46,12 +46,14 @@ func parseMounts(r io.Reader) ([]mountEntry, error) {
 			continue
 		}
 
-		// The same filesystem can be mounted at several points — a bind mount, or a subvolume. Reporting
-		// each one would make one full disk look like several.
-		if seen[point] {
+		// A mount point can appear twice, and the *last* line is the filesystem actually visible there —
+		// anything earlier is shadowed by it. Keeping the first would pair one filesystem's device name
+		// with another's statfs numbers, which reads as a plausible row and is simply wrong.
+		if i, ok := seen[point]; ok {
+			out[i] = mountEntry{device: device, point: point, fstype: fstype}
 			continue
 		}
-		seen[point] = true
+		seen[point] = len(out)
 
 		out = append(out, mountEntry{device: device, point: point, fstype: fstype})
 	}

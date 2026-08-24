@@ -179,3 +179,20 @@ func TestDedupeMountsKeepsDevicelessFilesystems(t *testing.T) {
 		t.Errorf("got %d, want 2 — deviceless mounts were collapsed", len(got))
 	}
 }
+
+func TestParseMountsKeepsTheVisibleFilesystemWhenOneIsMountedOverAnother(t *testing.T) {
+	// Mounting over an existing mount point hides what was there. Keeping the first line pairs one
+	// filesystem's device name with another's statfs numbers — a row that reads as plausible and is wrong.
+	got, err := parseMounts(strings.NewReader(
+		"/dev/sda2 /var ext4 rw 0 0\n/dev/sdc1 /var xfs rw 0 0\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("got %d entries, want 1", len(got))
+	}
+	if got[0].device != "/dev/sdc1" {
+		t.Errorf("device = %q, want /dev/sdc1 — the shadowed mount was kept", got[0].device)
+	}
+}
