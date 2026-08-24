@@ -1,0 +1,11 @@
+# Build output
+/dist/
+/infranest-agent
+
+# Local state the agent writes at runtime
+/state/
+
+# Editors
+.DS_Store
+.idea/
+.vscode/
