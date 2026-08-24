@@ -305,3 +305,41 @@ func TestAFailedCollectorIsRecordedEvenWhenNothingCanBeSent(t *testing.T) {
 		t.Fatal("the failed collector was not recorded while the push was failing")
 	}
 }
+
+func TestTheSpoolCannotWedgeOnReadingsTheServerIsDoneWith(t *testing.T) {
+	// The ordinary case, not an exotic one: a push lands, its response is lost, and the agent retries a
+	// batch it cannot know arrived. Every reading comes back `already_covered`. Treating that as a plain
+	// failure means keeping readings the server already holds and offering them again for ever — the head
+	// of the spool never clears and nothing behind it is ever sent.
+	sender := &fakeSender{answer: func(n int) (push.Result, error) {
+		return push.Result{
+			Accepted: 0,
+			Skipped:  []push.Skipped{{Reason: "already_covered"}},
+			Settled:  true,
+		}, push.ErrServerRefused
+	}}
+
+	r, _, _ := harness(t, sender, 6)
+
+	// At most the one collected after the last send. The property is that it *drains* — the failure this
+	// guards against is a spool that grows by one every tick for ever.
+	if r.Spool.Len() > 1 {
+		t.Fatalf("the spool kept %d reading(s) the server had already stored", r.Spool.Len())
+	}
+}
+
+func TestARefusalOfTheRequestItselfKeepsTheReadings(t *testing.T) {
+	// The other half of that rule. A 5xx, a proxy, a malformed request — anything that is not a verdict
+	// on the readings — must not cost them, which is the whole point of spooling in the first place.
+	sender := &fakeSender{answer: func(int) (push.Result, error) {
+		return push.Result{Settled: false}, errors.New("InfraNest answered 502: (no message)")
+	}}
+
+	r, _, _ := harness(t, sender, 6)
+
+	// The contrast with the test above, and the reason both are here: identical loop, identical failure
+	// count, opposite outcome. These readings accumulate because nothing has said anything about them.
+	if r.Spool.Len() < 2 {
+		t.Fatalf("readings were dropped on a failure that said nothing about them (spool holds %d)", r.Spool.Len())
+	}
+}

@@ -24,6 +24,16 @@ type Result struct {
 	Skipped    []Skipped
 	ServerTime time.Time
 	IngestURL  string
+
+	// Settled means the server gave a per-reading verdict on this batch — some stored, some refused for
+	// a reason that will not change. Those readings are done with either way and must leave the spool.
+	//
+	// Without this the spool could wedge permanently, and the case is ordinary rather than exotic: a
+	// push lands, its response is lost, the agent retries the batch it cannot know arrived, and every
+	// reading in it comes back `already_covered`. Treating that as a failure means keeping readings the
+	// server already holds and offering them again for ever — the head of the spool never clears and
+	// nothing behind it is ever sent.
+	Settled bool
 }
 
 // Skipped is one reading the server would not store, and why. Surfaced rather than swallowed: "your
@@ -117,6 +127,10 @@ func (c *Client) Send(ctx context.Context, url string, samples []json.RawMessage
 		Skipped:    decoded.Skipped,
 		ServerTime: decoded.ServerTime,
 		IngestURL:  decoded.IngestURL,
+		// A verdict on the readings themselves, as opposed to a refusal of the request. Every reason the
+		// server can give — already stored, too old, ahead of its clock — is terminal: none of them comes
+		// good by being sent again, and holding one blocks everything behind it.
+		Settled: decoded.Accepted > 0 || len(decoded.Skipped) > 0,
 	}
 
 	switch {

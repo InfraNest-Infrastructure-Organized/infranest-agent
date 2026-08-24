@@ -171,6 +171,16 @@ func (r *Runner) sendOnce(ctx context.Context, url *string, state *State) error 
 	}
 
 	if err != nil {
+		// A refusal that named the readings is still an answer about them. They are dropped, because
+		// every reason the server gives is terminal and keeping them would wedge the spool behind a
+		// batch that can never be accepted. The error is still recorded and still backs off.
+		if result.Settled {
+			r.Spool.Drop(entries)
+			for _, s := range result.Skipped {
+				r.logf("dropped the reading from %s: %s", s.CollectedAt.Format(time.RFC3339), s.Reason)
+			}
+		}
+
 		state.LastError = err.Error()
 		state.TokenRejected = errors.Is(err, push.ErrTokenRejected)
 		if state.TokenRejected && state.TokenRejectedAt.IsZero() {
