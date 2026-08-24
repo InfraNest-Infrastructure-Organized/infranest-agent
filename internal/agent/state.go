@@ -28,6 +28,11 @@ type State struct {
 	TokenRejected   bool      `json:"token_rejected,omitempty"`
 	TokenRejectedAt time.Time `json:"token_rejected_at,omitempty"`
 
+	// What each collector last said, by name — empty when they all worked. The same map the server now
+	// stores, kept here too because the machine is where somebody looks when a chart has a hole in it,
+	// and because this half is readable when the network is not.
+	CollectorErrors map[string]string `json:"collector_errors,omitempty"`
+
 	// Where readings are being sent, after any redirect the server asked for. Persisted so a restart does
 	// not undo a migration and quietly send the fleet back to the old host.
 	URL string `json:"url,omitempty"`

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 	"time"
 
 	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/config"
@@ -57,6 +58,21 @@ func Status(w io.Writer, cfg config.Config, now time.Time) {
 		fmt.Fprintln(w, "  Readings are being kept and will be sent when this clears.")
 	default:
 		fmt.Fprintf(w, "OK — last delivery succeeded%s.\n", since(state.LastSuccessAt, now))
+	}
+
+	if len(state.CollectorErrors) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "COLLECTORS — some readings are not being taken:")
+		// Sorted, so two runs of this command can be compared by eye or by diff in a ticket.
+		names := make([]string, 0, len(state.CollectorErrors))
+		for name := range state.CollectorErrors {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			fmt.Fprintf(w, "  %s: %s\n", name, state.CollectorErrors[name])
+		}
+		fmt.Fprintln(w, "  Everything else is still being collected and sent.")
 	}
 
 	// Reported whenever it is large enough to matter, not only when something has already failed: the

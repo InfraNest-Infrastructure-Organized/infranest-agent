@@ -83,7 +83,7 @@ func (r *Runner) Run(ctx context.Context) error {
 
 	for {
 		seq++
-		r.collectOnce(seq)
+		r.collectOnce(seq, &state)
 
 		if backoff > 0 {
 			r.logf("waiting %s before the next attempt", backoff.Round(time.Second))
@@ -120,7 +120,7 @@ func (r *Runner) Run(ctx context.Context) error {
 // recorded in the reading itself, and a spool that cannot be written is logged rather than fatal —
 // stopping the agent because one write failed would turn a full disk into a monitoring outage, at
 // precisely the moment the disk rule was about to fire.
-func (r *Runner) collectOnce(seq int64) {
+func (r *Runner) collectOnce(seq int64, state *State) {
 	sample, err := r.Collect(collect.Options{
 		Processes:    r.Config.Processes,
 		ProcessArgs:  r.Config.ProcessArgs,
@@ -132,6 +132,11 @@ func (r *Runner) collectOnce(seq int64) {
 
 		return
 	}
+
+	// Recorded even when the push cannot go out, which is the case it exists for: "memory has been
+	// unreadable since Tuesday" is a different problem from "we cannot reach InfraNest", and on a machine
+	// that cannot reach us this is the only place either is visible.
+	state.CollectorErrors = sample.Failed
 
 	if err := r.Spool.Add(seq, sample); err != nil {
 		r.logf("could not spool the reading: %v", err)

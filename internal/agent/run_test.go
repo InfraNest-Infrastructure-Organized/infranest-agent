@@ -235,3 +235,73 @@ func TestStatusNeverPrintsTheToken(t *testing.T) {
 }
 
 var _ io.Writer = (*strings.Builder)(nil)
+
+func TestStatusNamesTheCollectorsThatAreFailing(t *testing.T) {
+	// "Memory has been unreadable since Tuesday" is a different problem from "we cannot reach InfraNest",
+	// and on a machine that cannot reach us this is the only place either one is visible.
+	dir := t.TempDir()
+	_ = SaveState(dir, State{
+		LastSuccessAt:   time.Now().Add(-time.Minute),
+		CollectorErrors: map[string]string{"memory": "open /proc/meminfo: permission denied"},
+	})
+
+	out := &strings.Builder{}
+	Status(out, config.Config{URL: "https://ingest.infranest.app", StateDir: dir}, time.Now())
+
+	got := out.String()
+	for _, want := range []string{"COLLECTORS", "memory", "permission denied", "still being collected"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("status did not mention %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestAFailedCollectorIsRecordedEvenWhenNothingCanBeSent(t *testing.T) {
+	// The case it exists for. A push that cannot go out must not also cost the record of why a chart has
+	// a hole in it.
+	sender := &fakeSender{answer: func(int) (push.Result, error) {
+		return push.Result{}, errors.New("dial tcp: network is unreachable")
+	}}
+
+	dir := t.TempDir()
+	sp, err := spool.New(filepath.Join(dir, "spool"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clock := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	fired := 0
+	r := &Runner{
+		Config: config.Config{Token: "sat_x", URL: "https://ingest.infranest.app", Interval: time.Minute, StateDir: dir},
+		Sender: sender,
+		Spool:  sp,
+		Log:    &strings.Builder{},
+		Now:    func() time.Time { return clock },
+		Collect: func(collect.Options) (collect.Sample, error) {
+			s := collect.Sample{CollectedAt: clock}
+			s.Failed = map[string]string{"mounts": "statfs /data: permission denied"}
+
+			return s, nil
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	r.After = func(d time.Duration) <-chan time.Time {
+		fired++
+		clock = clock.Add(d)
+		if fired >= 2 {
+			cancel()
+		}
+		ch := make(chan time.Time, 1)
+		ch <- clock
+
+		return ch
+	}
+	if err := r.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := LoadState(dir).CollectorErrors["mounts"]; got == "" {
+		t.Fatal("the failed collector was not recorded while the push was failing")
+	}
+}
