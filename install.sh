@@ -193,16 +193,20 @@ if command -v systemctl >/dev/null 2>&1; then
 
   systemctl daemon-reload
 
-  # Enabled, not started. `run` is not implemented in this build, so starting it would fail immediately
-  # and systemd would retry every RestartSec forever — while this script cheerfully printed "started".
-  # An installer that reports success over a crash loop is worse than one that says what it did.
-  if "${BIN_DIR}/infranest-agent" run >/dev/null 2>&1; then
-    systemctl enable --now "$SERVICE" >/dev/null 2>&1 || warn "could not start the service — check: systemctl status $SERVICE"
+  # Started, and then checked. Nothing here runs `run` to find out whether it works: `run` is a daemon
+  # loop now, so a probe that waits for it to exit waits for ever — the installer would hang on the last
+  # step with no output, which reads as a broken download. An earlier build did exactly this on purpose,
+  # because back then `run` returned an error immediately; the check outlived the reason for it.
+  #
+  # Configuration errors are fatal inside the agent, so a service that comes up is one that read its
+  # token and its URL. That is what makes `is-active` worth asking.
+  systemctl enable --now "$SERVICE" >/dev/null 2>&1 || true
+
+  if systemctl is-active --quiet "$SERVICE"; then
     log "service enabled and started"
   else
-    systemctl enable "$SERVICE" >/dev/null 2>&1 || true
-    warn "this build cannot send yet, so the service is installed but not started."
-    warn "It will start on its own once you install a build that can."
+    warn "the service did not stay up. What it says:"
+    systemctl status "$SERVICE" --no-pager --lines=10 2>&1 | sed 's/^/    /' || true
   fi
 else
   warn "no systemd here. The agent is installed but nothing is running it."

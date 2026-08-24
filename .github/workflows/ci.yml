@@ -112,12 +112,20 @@ jobs:
             echo "::error::go.sum is not empty — a third-party dependency was added. See CONTRIBUTING.md."
             exit 1
           fi
-          # Standard-library import paths are lowercase letters, digits and slashes, and contain no dot.
-          # A dot is what makes a path a domain, so "has no dot" is the property that actually separates
-          # the standard library from everything else — `unicode/utf8` has a digit, `vendor/...` does not.
+          # Go's own answer, not a guess at one. `.Standard` is the toolchain's field for "this is the
+          # standard library", so this cannot disagree with the compiler about what counts.
+          #
+          # It used to be `grep -E '\.'` — a dot makes a path a domain, so "has no dot" looked like it
+          # separated the standard library from everything else. It does not: the standard library
+          # vendors parts of golang.org/x into itself, so `vendor/golang.org/x/net/http2/hpack` is
+          # stdlib with a dot in its name. That never came up while the agent imported nothing that
+          # reached crypto/tls, and the first HTTPS client turned this job red for a dependency nobody
+          # had added. A gate that fails on correct code gets switched off, which is the real cost.
           for os in linux windows darwin freebsd; do
-            if GOOS=$os go list -deps ./... | grep -vE '^(github\.com/InfraNest-Infrastructure-Organized/infranest-agent(/.*)?$)' | grep -E '\.' ; then
-              echo "::error::A package outside the standard library is in the $os graph. See CONTRIBUTING.md."
+            outside=$(GOOS=$os go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./... \
+              | grep -vE '^github\.com/InfraNest-Infrastructure-Organized/infranest-agent(/.*)?$' || true)
+            if [ -n "$outside" ]; then
+              echo "::error::A package outside the standard library is in the $os graph: $outside. See CONTRIBUTING.md."
               exit 1
             fi
           done

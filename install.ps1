@@ -163,7 +163,11 @@ try {
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
     }
 
-    $action    = New-ScheduledTaskAction  -Execute $BinPath -Argument 'run'
+    # A scheduled task inherits no environment — no EnvironmentFile, nothing. That is why the agent
+    # reads the config file itself (internal/config/file.go), and why the path is named here rather
+    # than left to a default: relying on PROGRAMDATA being set inside a LOCAL SERVICE task is an
+    # assumption, and the symptom if it is ever wrong is an agent that starts and sends nowhere.
+    $action    = New-ScheduledTaskAction -Execute $BinPath -Argument "run --config `"$ConfPath`""
     $trigger   = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\LOCAL SERVICE' -LogonType ServiceAccount -RunLevel Limited
     $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
@@ -181,14 +185,21 @@ try {
         'NT AUTHORITY\LOCAL SERVICE', 'Read', 'Allow')))
     Set-Acl -Path $ConfPath -AclObject $acl
 
-    # Registered, not started. `run` is not implemented in this build, so starting it would fail three
-    # times and give up — while this script reported success. Saying what actually happened is better.
-    & $BinPath run 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) {
-        Start-ScheduledTask -TaskName $TaskName
+    # Started, then checked a moment later. Nothing here runs `run` to find out whether it works: `run`
+    # is a long-lived loop, so a probe that waits for it to exit waits for ever and the installer hangs
+    # on its last step with no output. An earlier build did exactly that deliberately, because back then
+    # `run` returned an error immediately; the check outlived the reason for it.
+    #
+    # `status` is the safe probe: it reads what is on disk and returns.
+    Start-ScheduledTask -TaskName $TaskName
+    Start-Sleep -Seconds 3
+
+    $state = (Get-ScheduledTask -TaskName $TaskName).State
+    if ($state -eq 'Running') {
         Write-Step 'scheduled task registered and started'
     } else {
-        Write-Warn 'This build cannot send yet, so the task is registered but not started. It will run on its own after a reboot once you install a build that can.'
+        Write-Warn "the task did not stay running (state: $state). What the agent says:"
+        & $BinPath status --config $ConfPath 2>&1 | ForEach-Object { Write-Host "    $_" }
     }
 }
 finally {

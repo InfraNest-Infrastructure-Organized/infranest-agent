@@ -187,22 +187,92 @@ CPUQuota=5%
 ```
 
 The token lives in `/etc/infranest/agent.conf`, mode 0600, loaded with `EnvironmentFile=` — never
-`Environment=` in the unit, which `systemctl show` exposes to any local user.
+`Environment=` in the unit, which `systemctl show` exposes to any local user. On Windows the same file
+lives in `%ProgramData%\InfraNest\agent.conf`, readable only by Administrators, SYSTEM and the account
+the task runs as; the agent reads it directly there, because a scheduled task inherits no environment.
+
+## A network problem costs nothing
+
+Readings are collected on a fixed cadence and delivered separately. If a delivery fails — the network is
+down, our end is down, a proxy is having a moment — the readings are **kept on disk** and sent when the
+connection comes back, in one batch.
+
+This matters more than it sounds. The readings that fail to send are, by definition, the ones from the
+minutes something was wrong, and those are the minutes anyone will ask about afterwards. An agent that
+drops them has dropped the useful part.
+
+Nothing is deleted from the spool until InfraNest confirms it stored it. A request that merely *completed*
+is not a delivery: a 502 from something in front of the API completes too.
+
+```
+Every 60s:   collect  →  write to /var/lib/infranest-agent/spool
+             deliver whatever is waiting  →  on success, and only then, delete it
+```
+
+The spool holds about eight hours and then discards the oldest first. A monitoring agent must not become
+the reason a server falls over, so it will not fill your disk waiting for us to come back.
+
+## Settings
+
+All optional except the token, and all set for you by the installer.
+
+| | |
+|---|---|
+| `INFRANEST_TOKEN` | the server token. Required |
+| `INFRANEST_URL` | where to send. Default `https://ingest.infranest.app` |
+| `INFRANEST_INTERVAL` | how often to collect. Default `60s`, between `10s` and `5m` |
+| `INFRANEST_STATE_DIR` | spool and state. Default `/var/lib/infranest-agent` |
+| `INFRANEST_PROCESSES` | collect the busiest processes. Off by default |
+| `INFRANEST_PROCESS_ARGS` | include full command lines. Off by default, and for good reason — see below |
+
+`INFRANEST_URL` must be `https`. The token is a bearer credential and this is the wire it crosses; there
+is no configuration for which plaintext is the right trade, so the agent refuses to start rather than
+send it in the clear.
 
 ## Commands
 
 | | |
 |---|---|
 | `infranest-agent print` | one collection cycle to stdout, sending nothing |
-| `infranest-agent status` | what is collecting, what each collector last returned, when the last push succeeded, the last error |
-| `infranest-agent flare` | a redacted bundle for a support ticket, with secrets stripped |
-| `infranest-agent uninstall` | removes the unit, user, binary, config and state |
+| `infranest-agent run` | collect and send continuously — this is what the service runs |
+| `infranest-agent status` | whether readings are being delivered, and if not, why not |
+| `infranest-agent flare` | a redacted bundle for a support ticket, with secrets stripped *(not yet)* |
+| `infranest-agent uninstall` | removes the unit, user, binary, config and state *(not yet)* |
 | `infranest-agent --version` | version, commit, build date |
+
+`status` answers from what is on the machine and reaches nothing. That is deliberate: the question is
+usually asked *because* the machine cannot reach us, and a diagnostic that has to reach us to run is no
+use in the one case it exists for. It never prints your token, so it is safe to paste into a ticket.
+
+```
+$ infranest-agent status
+Sending to:   https://ingest.infranest.app/api/metrics/push
+Every:        1m0s
+State in:     /var/lib/infranest-agent
+Waiting:      2 reading(s) not yet delivered
+
+FAILING — last delivery succeeded 4m12s ago, but the most recent attempt did not.
+  Last error: cannot reach InfraNest: dial tcp: i/o timeout
+  Readings are being kept and will be sent when this clears.
+```
 
 ## Where it sends
 
 One destination: your InfraNest ingest host, over HTTPS. Nothing else — no CDN, no analytics, no error
 reporting to a third party. Allowlist that one host and block the rest if you want to.
+
+**If that address ever has to change**, you should not have to visit your servers. Two things make that
+true, and neither needs you:
+
+- `ingest.infranest.app` is a name we intend never to change. What is behind it — host, region, provider —
+  can move at any time, and DNS is what makes that invisible.
+- If the *name itself* has to change, a push response can say so and the agent will follow it. It follows
+  only over HTTPS and only to a host in the same domain it is already sending to, so this can move a fleet
+  between our own hosts and cannot be used, by anyone who manages to answer a single push, to point your
+  servers somewhere else for good. HTTP redirects are refused outright, for the same reason.
+
+Nothing about this is hardcoded either: `INFRANEST_URL` is yours to set, and self-hosted installations
+point it at their own address.
 
 ## Contributing
 
