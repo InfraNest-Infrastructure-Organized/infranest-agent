@@ -74,6 +74,11 @@ func run(args []string, stdout, stderr *os.File) error {
 			MaxProcesses: 10,
 			CPUInterval:  300 * time.Millisecond,
 		})
+	case "run", "status", "flare", "uninstall":
+		// Recognised, so the error says what is actually true rather than "unknown command", which would
+		// send someone hunting for a typo that is not there. The installers already reference `run` and
+		// `status`; naming them here keeps the story consistent while the sending half is written.
+		return fmt.Errorf("%q is not implemented yet — this build can only 'print'", command)
 	default:
 		return fmt.Errorf("unknown command %q — run without arguments for usage", command)
 	}
@@ -125,9 +130,10 @@ Usage:
 
 Commands:
   print       run one collection cycle and write what would be sent to stdout, sending nothing
-  status      what is collecting, and when the last push succeeded
-  flare       a redacted bundle for a support ticket
-  uninstall   remove the unit, user, binary, config and state
+  run         collect continuously and send                      (not implemented yet)
+  status      what is collecting, and when the last push succeeded (not implemented yet)
+  flare       a redacted bundle for a support ticket              (not implemented yet)
+  uninstall   remove the unit, user, binary, config and state     (not implemented yet)
 
 Flags:
   --version        print version information and exit

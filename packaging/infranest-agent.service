@@ -1,0 +1,58 @@
+[Unit]
+Description=InfraNest monitoring agent
+Documentation=https://github.com/InfraNest-Infrastructure-Organized/infranest-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/infranest-agent run
+EnvironmentFile=/etc/infranest/agent.conf
+Restart=on-failure
+RestartSec=15s
+
+# Runs as nobody in particular. CPU, memory, load, mount usage and process names are all readable without
+# privilege, so there is nothing here that needs root — and an agent that needed it would be a much harder
+# thing to ask anyone to install.
+User=infranest-agent
+Group=infranest-agent
+
+# It cannot gain privilege, hold a capability, or become anything else.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+# It cannot write to the filesystem, read anyone's home directory, or see other users' processes.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectProc=invisible
+ProcSubset=all
+ReadWritePaths=/var/lib/infranest-agent
+
+# It cannot touch the kernel, and cannot load anything.
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+
+# It speaks IP and nothing else — no unix sockets, no netlink, no raw packets.
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+
+# It cannot become the reason this server falls over. That is the one failure a monitoring agent must not
+# have, so the limits are set here rather than trusted to the program.
+MemoryMax=64M
+CPUQuota=5%
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

@@ -73,24 +73,101 @@ absent there, and are left absent rather than approximated:
 
 ## Install
 
+> **Not yet.** There is no release to download, so the one-liners below do not work today. Everything
+> else on this page is real and you can try it now — build from source and run `print`. This note goes
+> when the first release does.
+
+You need a **token** first. In InfraNest, open the server you want to monitor, go to its **Metrics** tab
+and choose **Install agent**. It gives you a line to copy that already has the token in it.
+
+### Linux
+
 ```sh
-curl -fsSL https://get.infranest.app/agent.sh | sh -s -- --token sat_YOUR_TOKEN
+curl -fsSL https://get.infranest.app/agent.sh | sudo sh -s -- --token sat_YOUR_TOKEN
 ```
 
-If you would rather not pipe a script into a shell — a reasonable position — verify it first:
+Prefer not to pipe a script into a shell? That is a reasonable position — download it, read it, then run it:
 
 ```sh
 curl -fsSLO https://get.infranest.app/agent.sh
-curl -fsSLO https://get.infranest.app/agent.sh.sha256
-sha256sum -c agent.sh.sha256
-sh agent.sh --token-file /path/to/token
+less agent.sh                       # it is about 200 lines
+sudo sh agent.sh --token sat_YOUR_TOKEN
 ```
 
-The installer is a thin wrapper: it detects your OS and architecture, downloads a **versioned** binary with
-its checksum and signature, verifies both, refuses to continue if either fails, and installs a systemd
-unit. The script is never the payload — a script that *is* the payload cannot be verified against anything.
+### Windows
 
-Get a token from your server's page in InfraNest.
+In PowerShell, **as administrator**:
+
+```powershell
+irm https://get.infranest.app/agent.ps1 -OutFile agent.ps1
+.\agent.ps1 -Token sat_YOUR_TOKEN
+```
+
+### What the installer does
+
+No surprises, in this order:
+
+1. Works out which build fits this machine
+2. Downloads it, and **checks the checksum** — if that does not match it stops and installs nothing
+3. Creates a user called `infranest-agent` with no login and no privileges (Windows: uses the built-in
+   `LOCAL SERVICE` account)
+4. Puts the token in a file only that user can read
+5. Starts it, and sets it to start again after a reboot
+
+It does not touch anything else, and it does not need to reach the internet again except to send readings.
+
+### Check it worked
+
+```sh
+infranest-agent print     # exactly what this machine sends, printed instead of sent
+infranest-agent status    # what is being collected, and when the last send succeeded
+```
+
+### Remove it
+
+Completely, leaving nothing behind:
+
+```sh
+sudo sh agent.sh --uninstall          # Linux
+.\agent.ps1 -Uninstall                # Windows
+```
+
+### Keeping the token out of your shell history
+
+The token is a credential, and a command line ends up in `~/.bash_history` and is visible in `ps` while it
+runs. On a shared machine, put it in a file instead:
+
+```sh
+sudo sh agent.sh --token-file /root/token && shred -u /root/token
+```
+
+### Building it yourself
+
+You need Go, and nothing else — there are no dependencies to fetch.
+
+```sh
+git clone https://github.com/InfraNest-Infrastructure-Organized/infranest-agent
+cd infranest-agent
+go build ./cmd/infranest-agent
+./infranest-agent print
+```
+
+To install the binary you just built rather than a downloaded one:
+
+```sh
+sudo sh install.sh --from ./infranest-agent --token sat_YOUR_TOKEN
+```
+
+### If this machine does not use systemd
+
+Alpine, and anything on OpenRC, runit or s6. The installer still installs the agent, tells you it could
+not start it, and leaves you to wire it up. The command it needs to run is:
+
+```sh
+/usr/local/bin/infranest-agent run
+```
+
+Run it as the `infranest-agent` user, with `/etc/infranest/agent.conf` in its environment.
 
 ## How it runs
 
@@ -127,14 +204,11 @@ The token lives in `/etc/infranest/agent.conf`, mode 0600, loaded with `Environm
 One destination: your InfraNest ingest host, over HTTPS. Nothing else — no CDN, no analytics, no error
 reporting to a third party. Allowlist that one host and block the rest if you want to.
 
-## Building it yourself
+## Contributing
 
-```sh
-go build ./cmd/infranest-agent
-go test ./...
-```
-
-No third-party dependencies. Everything here is the Go standard library, so the only supply chain is Go's.
+Building and testing it is covered under [Install](#building-it-yourself) above; the rules that shape the
+code are in [CONTRIBUTING.md](CONTRIBUTING.md). The short version: it only sends, and it has no
+dependencies — both are checked in CI, not just asked for.
 
 ## InfraNest
 
