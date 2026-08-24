@@ -181,8 +181,15 @@ try {
         'NT AUTHORITY\LOCAL SERVICE', 'Read', 'Allow')))
     Set-Acl -Path $ConfPath -AclObject $acl
 
-    Start-ScheduledTask -TaskName $TaskName
-    Write-Step 'scheduled task registered and started'
+    # Registered, not started. `run` is not implemented in this build, so starting it would fail three
+    # times and give up — while this script reported success. Saying what actually happened is better.
+    & $BinPath run 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Start-ScheduledTask -TaskName $TaskName
+        Write-Step 'scheduled task registered and started'
+    } else {
+        Write-Warn 'This build cannot send yet, so the task is registered but not started. It will run on its own after a reboot once you install a build that can.'
+    }
 }
 finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue

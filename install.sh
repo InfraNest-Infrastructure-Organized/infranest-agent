@@ -47,13 +47,17 @@ log()  { printf '  %s\n' "$*"; }
 warn() { printf '  ! %s\n' "$*" >&2; }
 die()  { printf '\nerror: %s\n' "$*" >&2; exit 1; }
 
+# `shift 2` with only one argument left exits the shell immediately under `set -e`, with no output at
+# all — so `--token` with a forgotten value looked like a silent crash rather than a missing value.
+need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
+
 while [ $# -gt 0 ]; do
   case "$1" in
-    --token)      TOKEN="${2:-}"; shift 2 ;;
-    --token-file) TOKEN_FILE="${2:-}"; shift 2 ;;
-    --url)        API_URL="${2:-}"; shift 2 ;;
-    --version)    VERSION="${2:-}"; shift 2 ;;
-    --from)       FROM_FILE="${2:-}"; shift 2 ;;
+    --token)      need_value "$@"; TOKEN="$2"; shift 2 ;;
+    --token-file) need_value "$@"; TOKEN_FILE="$2"; shift 2 ;;
+    --url)        need_value "$@"; API_URL="$2"; shift 2 ;;
+    --version)    need_value "$@"; VERSION="$2"; shift 2 ;;
+    --from)       need_value "$@"; FROM_FILE="$2"; shift 2 ;;
     --uninstall)  DO_UNINSTALL=1; shift ;;
     --help|-h)    usage; exit 0 ;;
     *)            die "unknown option: $1 (try --help)" ;;
@@ -146,8 +150,11 @@ fi
 if ! id "$USER_NAME" >/dev/null 2>&1; then
   log "creating the ${USER_NAME} system user"
   # useradd on most distributions, adduser on Alpine. Neither exists everywhere, so try both.
-  useradd --system --no-create-home --shell /usr/sbin/nologin "$USER_NAME" 2>/dev/null \
-    || adduser -S -D -H -s /sbin/nologin "$USER_NAME" 2>/dev/null \
+  # `--user-group` explicitly: on distributions with USERGROUPS_ENAB no (SLES, openSUSE) useradd creates
+  # no matching group, the chown below then fails under `set -e`, and systemd would refuse Group= anyway.
+  useradd --system --user-group --no-create-home --shell /usr/sbin/nologin "$USER_NAME" 2>/dev/null \
+    || { addgroup -S "$USER_NAME" 2>/dev/null || groupadd --system "$USER_NAME" 2>/dev/null || true
+         adduser -S -D -H -G "$USER_NAME" -s /sbin/nologin "$USER_NAME" 2>/dev/null; } \
     || die "could not create the $USER_NAME user"
 fi
 
@@ -175,14 +182,28 @@ log "wrote ${CONF_DIR}/agent.conf (0600, ${USER_NAME} only)"
 # ── The service ──────────────────────────────────────────────────────────────────────────────────────
 if command -v systemctl >/dev/null 2>&1; then
   log "installing the systemd service"
-  curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/packaging/infranest-agent.service" \
+  # The unit that matches this binary, not whatever is on main — otherwise `--version v1.0.0` pairs an
+  # old agent with a newer unit, and a rollback rolls back only half of the install.
+  unit_ref="main"
+  [ "$VERSION" = "latest" ] || unit_ref="$VERSION"
+  curl -fsSL "https://raw.githubusercontent.com/${REPO}/${unit_ref}/packaging/infranest-agent.service" \
     -o "/etc/systemd/system/${SERVICE}.service" 2>/dev/null \
     || cp "$(dirname "$0")/packaging/infranest-agent.service" "/etc/systemd/system/${SERVICE}.service" 2>/dev/null \
     || die "could not install the service file"
 
   systemctl daemon-reload
-  systemctl enable --now "$SERVICE" >/dev/null 2>&1 || warn "could not start the service — check: systemctl status $SERVICE"
-  log "service enabled and started"
+
+  # Enabled, not started. `run` is not implemented in this build, so starting it would fail immediately
+  # and systemd would retry every RestartSec forever — while this script cheerfully printed "started".
+  # An installer that reports success over a crash loop is worse than one that says what it did.
+  if "${BIN_DIR}/infranest-agent" run >/dev/null 2>&1; then
+    systemctl enable --now "$SERVICE" >/dev/null 2>&1 || warn "could not start the service — check: systemctl status $SERVICE"
+    log "service enabled and started"
+  else
+    systemctl enable "$SERVICE" >/dev/null 2>&1 || true
+    warn "this build cannot send yet, so the service is installed but not started."
+    warn "It will start on its own once you install a build that can."
+  fi
 else
   warn "no systemd here. The agent is installed but nothing is running it."
   warn "Start it however this machine starts things:  ${BIN_DIR}/infranest-agent run"

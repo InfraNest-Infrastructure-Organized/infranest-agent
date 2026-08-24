@@ -40,6 +40,11 @@ const (
 
 // Options mirrors the Linux build. Load average has no field here because Windows has no load average —
 // see Collect.
+//
+// ProcessArgs is accepted and currently has no effect on Windows: reading another process's command line
+// means ReadProcessMemory against its PEB, which needs more privilege than this agent asks for and is
+// exactly the kind of capability it should not acquire. The flag is documented as Linux-only rather than
+// silently doing nothing, which is what it did before.
 type Options struct {
 	Processes    bool
 	ProcessArgs  bool
@@ -295,9 +300,13 @@ func processesWindows(opts Options) ([]Process, error) {
 
 		syscall.CloseHandle(h)
 
-		if p.Command != "" {
-			procs = append(procs, p)
+		if p.Command == "" {
+			// The name could not be read — usually another account's process. Reporting it by pid is more
+			// honest than dropping it: something is using that memory, and a list that silently omits the
+			// largest consumer answers "what is eating this box" wrongly.
+			p.Command = fmt.Sprintf("pid %d", pid)
 		}
+		procs = append(procs, p)
 	}
 
 	return topByMemory(procs, opts.MaxProcesses), nil
@@ -310,7 +319,10 @@ func processesWindows(opts Options) ([]Process, error) {
 // or a build under someone's home directory — and the agent's default is to say as little as answers the
 // question.
 func processImageName(h syscall.Handle) (string, error) {
-	buf := make([]uint16, syscall.MAX_PATH)
+	// 32767, not MAX_PATH. Windows has allowed longer paths since 1607, and a process installed under a
+	// deep path would otherwise fail here — after which the caller drops it entirely, so the busiest
+	// process on the machine could be the one silently missing from the list.
+	buf := make([]uint16, 32768)
 	size := uint32(len(buf))
 
 	r, _, err := procQueryFullProcessImage.Call(

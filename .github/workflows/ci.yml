@@ -78,15 +78,20 @@ jobs:
       #
       # This is a build-graph check rather than a grep: an indirect import through a helper package would
       # slip past a grep of our own source, and that is exactly how an invariant erodes.
+      # Per platform, not just the host's. `go list -deps` resolves build tags for one GOOS, so a check
+      # that runs only on Linux never looks at the //go:build windows file at all — `os/exec` could sit in
+      # it and this job would still be green. The guarantee is per-binary, so the check has to be too.
       - name: The agent cannot execute anything, or listen
         run: |
-          deps=$(go list -deps ./cmd/infranest-agent)
           fail=0
-          for pkg in os/exec net/rpc net/http/cgi net/http/fcgi; do
-            if echo "$deps" | grep -qx "$pkg"; then
-              echo "::error::$pkg is in the agent's dependency graph. The agent only sends: it runs nothing and serves nothing."
-              fail=1
-            fi
+          for os in linux windows darwin freebsd; do
+            deps=$(GOOS=$os go list -deps ./cmd/infranest-agent)
+            for pkg in os/exec net/rpc net/http/cgi net/http/fcgi; do
+              if echo "$deps" | grep -qx "$pkg"; then
+                echo "::error::$pkg is in the $os dependency graph. The agent only sends: it runs nothing and serves nothing."
+                fail=1
+              fi
+            done
           done
           exit $fail
 
@@ -110,7 +115,9 @@ jobs:
           # Standard-library import paths are lowercase letters, digits and slashes, and contain no dot.
           # A dot is what makes a path a domain, so "has no dot" is the property that actually separates
           # the standard library from everything else — `unicode/utf8` has a digit, `vendor/...` does not.
-          if go list -deps ./... | grep -vE '^(github\.com/InfraNest-Infrastructure-Organized/infranest-agent(/.*)?$)' | grep -E '\.' ; then
-            echo "::error::A package outside the standard library is in the graph. See CONTRIBUTING.md."
-            exit 1
-          fi
+          for os in linux windows darwin freebsd; do
+            if GOOS=$os go list -deps ./... | grep -vE '^(github\.com/InfraNest-Infrastructure-Organized/infranest-agent(/.*)?$)' | grep -E '\.' ; then
+              echo "::error::A package outside the standard library is in the $os graph. See CONTRIBUTING.md."
+              exit 1
+            fi
+          done

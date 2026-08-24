@@ -28,7 +28,11 @@ LockPersonality=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ProtectProc=invisible
+# ProtectProc is deliberately NOT `invisible`. That hides other users' /proc entries from this process,
+# which would leave the process collector able to see only the agent itself — a feature quietly reduced to
+# nothing by a hardening directive that looks obviously correct. `default` keeps the kernel's own rules,
+# which already stop an unprivileged agent reading anything sensitive.
+ProtectProc=default
 ProcSubset=all
 ReadWritePaths=/var/lib/infranest-agent
 

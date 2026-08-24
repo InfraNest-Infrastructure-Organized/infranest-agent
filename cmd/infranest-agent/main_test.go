@@ -1,12 +1,17 @@
 package main
 
 import (
+	"io"
 	"os"
 	"strings"
 	"testing"
 )
 
 // capture runs the command with args and returns what it wrote to stdout.
+//
+// The reader runs in its own goroutine because an os.Pipe holds only about 64 KiB: writing more than that
+// with nobody draining it blocks the writer forever, so a test of `print --processes` on a busy machine
+// would hang until the package timeout rather than fail with a message.
 func capture(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 
@@ -15,20 +20,19 @@ func capture(t *testing.T, args ...string) (string, error) {
 		t.Fatalf("pipe: %v", err)
 	}
 
+	read := make(chan string, 1)
+	go func() {
+		var sb strings.Builder
+		io.Copy(&sb, r)
+		read <- sb.String()
+	}()
+
 	runErr := run(args, w, os.Stderr)
 	w.Close()
+	out := <-read
+	r.Close()
 
-	var sb strings.Builder
-	buf := make([]byte, 4096)
-	for {
-		n, readErr := r.Read(buf)
-		sb.Write(buf[:n])
-		if readErr != nil {
-			break
-		}
-	}
-
-	return sb.String(), runErr
+	return out, runErr
 }
 
 func TestVersionFlagReportsBuildInfo(t *testing.T) {

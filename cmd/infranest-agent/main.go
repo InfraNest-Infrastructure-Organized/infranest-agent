@@ -58,6 +58,12 @@ func run(args []string, stdout, stderr *os.File) error {
 		return err
 	}
 
+	// A second positional means a typo or a misunderstanding, and dropping it silently is how
+	// `print --processes` came to do nothing. Saying so costs a line.
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected argument %q — only one command at a time", fs.Arg(0))
+	}
+
 	if *showVersion {
 		fmt.Fprintf(stdout, "infranest-agent %s (commit %s, built %s)\n", version, commit, date)
 		return nil
@@ -138,8 +144,8 @@ Commands:
 Flags:
   --version        print version information and exit
   --processes      include the top processes by memory
-  --process-args   include full command lines — these often contain credentials,
-                   which is why the executable name alone is the default
+  --process-args   include full command lines (Linux only) — these often contain
+                   credentials, which is why the executable name alone is the default
 
 Only 'print' is implemented so far. See the README for what is coming.
 `)

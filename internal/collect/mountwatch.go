@@ -1,6 +1,7 @@
 package collect
 
 import (
+	"sort"
 	"sync"
 	"time"
 )
@@ -75,7 +76,21 @@ func probeMounts(entries []mountEntry, probe func(mountEntry) (Mount, bool), tim
 		}
 	}
 
+	sortMounts(mounts)
+
 	return mounts, nil
+}
+
+// sortMounts puts the output in a fixed order.
+//
+// Results arrive in whatever order the goroutines finish, which is nondeterministic — and `dedupeMounts`
+// keeps the first match, so with two mount points on one filesystem the surviving `mount_point` flipped
+// between samples. On the server that reads as a mount appearing and disappearing, which breaks per-mount
+// history and makes a disk rule alternate between two subjects.
+func sortMounts(mounts []Mount) {
+	sort.Slice(mounts, func(i, j int) bool {
+		return mounts[i].MountPoint < mounts[j].MountPoint
+	})
 }
 
 type mountBlocklist struct {

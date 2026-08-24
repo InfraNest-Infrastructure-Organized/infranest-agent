@@ -85,3 +85,40 @@ func TestABlockedMountIsRetriedEventually(t *testing.T) {
 		t.Error("the block did not expire")
 	}
 }
+
+func TestMountsComeBackInAStableOrder(t *testing.T) {
+	// probeMounts appends in goroutine-completion order, which is nondeterministic — and dedupeMounts
+	// keeps the first match, so two mount points on one filesystem meant the surviving mount_point
+	// flipped between samples. On the server that reads as a mount appearing and disappearing, which
+	// breaks per-mount history and makes a disk rule alternate between two subjects.
+	entries := []mountEntry{
+		{point: "/var"}, {point: "/"}, {point: "/home"}, {point: "/mnt/backup"},
+	}
+	probe := func(e mountEntry) (Mount, bool) {
+		return Mount{MountPoint: e.point, TotalBytes: 100, UsedBytes: 1}, true
+	}
+
+	var first []string
+	for run := 0; run < 25; run++ {
+		mounts, _ := probeMounts(entries, probe, time.Second)
+
+		got := make([]string, len(mounts))
+		for i, m := range mounts {
+			got[i] = m.MountPoint
+		}
+
+		if first == nil {
+			first = got
+			continue
+		}
+		for i := range got {
+			if got[i] != first[i] {
+				t.Fatalf("order changed between runs: %v then %v", first, got)
+			}
+		}
+	}
+
+	if first[0] != "/" {
+		t.Errorf("not sorted: %v", first)
+	}
+}
