@@ -55,6 +55,22 @@ Memory, disk space, load average and processes cannot be read from a cloud provi
 the reason this exists: a full disk and an out-of-memory kill are what actually take a server down, and no
 provider API reports either.
 
+## Platforms
+
+One static binary per architecture, built with `CGO_ENABLED=0`, so the same Linux build runs on glibc and
+musl alike — Debian, Ubuntu, RHEL, Alpine, and anything else with a mounted `/proc`. Linux on amd64,
+arm64, armv7, 386, riscv64, ppc64le and s390x; Windows on amd64 and arm64.
+
+Windows collects CPU, memory, disk and uptime, and processes when asked. Two things Linux reports are
+absent there, and are left absent rather than approximated:
+
+- **Load average** does not exist on Windows. Processor Queue Length is sometimes offered as an
+  equivalent and is not one — it counts waiting threads rather than a decaying average of runnable work,
+  so a threshold carried over from Linux would mean something quite different. A missing value is
+  excluded from an alert's window; a fabricated one would fire alerts nobody could interpret.
+- **Swap**: Windows has a page file, and the arithmetic usually offered for "swap used" measures commit
+  charge, which is a different thing.
+
 ## Install
 
 ```sh

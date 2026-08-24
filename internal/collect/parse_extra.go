@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 )
 
 // mountEntry is one line of /proc/self/mounts, before we decide whether it is worth reporting.
@@ -185,4 +186,40 @@ func topByMemory(procs []Process, limit int) []Process {
 	}
 
 	return procs
+}
+
+// baseName returns the last path element, handling both separators.
+//
+// Not path/filepath.Base: that follows the *host* separator, so a Windows path parsed on a Linux build —
+// which is what the tests do — would come back unchanged. Splitting on both is what makes this testable
+// off-Windows, which is the only place it can be tested at all here.
+func baseName(p string) string {
+	for i := len(p) - 1; i >= 0; i-- {
+		if p[i] == '/' || p[i] == '\\' {
+			return p[i+1:]
+		}
+	}
+
+	return p
+}
+
+// splitNulUTF16 splits a NUL-separated, NUL-NUL-terminated UTF-16 block into strings.
+//
+// This is the shape several Windows APIs use to return a list — GetLogicalDriveStringsW among them — and
+// getting it wrong yields one string containing every drive letter run together.
+func splitNulUTF16(buf []uint16) []string {
+	var out []string
+	start := 0
+
+	for i, c := range buf {
+		if c != 0 {
+			continue
+		}
+		if i > start {
+			out = append(out, string(utf16.Decode(buf[start:i])))
+		}
+		start = i + 1
+	}
+
+	return out
 }

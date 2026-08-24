@@ -33,7 +33,34 @@ jobs:
 
       - run: go vet ./...
       - run: go test -race ./...
-      - run: go build ./cmd/infranest-agent
+
+      # Every target, every commit. Most of this agent is platform-specific by construction, so a
+      # Linux-only build would let a Windows or ARM break sit undiscovered until someone tried to install
+      # it — and the person who discovers it that way is a customer.
+      #
+      # CGO_ENABLED=0 is the portability guarantee, not an optimisation: it produces a static binary with
+      # no libc, so one Linux build runs on glibc and musl alike. Without it, an Alpine host needs a
+      # different artefact.
+      - name: Build every target
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          for target in \
+            linux/amd64 linux/arm64 linux/arm linux/386 linux/riscv64 linux/ppc64le linux/s390x \
+            windows/amd64 windows/arm64 \
+            darwin/amd64 darwin/arm64 freebsd/amd64; do
+            os=${target%/*}; arch=${target#*/}
+            GOOS=$os GOARCH=$arch go build -o /dev/null ./... || { echo "::error::build failed for $target"; exit 1; }
+            echo "  ok  $target"
+          done
+
+      # `go vet` only inspects the platform it runs on, so the Windows syscall code would otherwise never
+      # be examined at all.
+      - name: Vet the other platforms
+        run: |
+          for os in windows darwin freebsd; do
+            GOOS=$os go vet ./... || { echo "::error::vet failed for $os"; exit 1; }
+          done
 
   invariant:
     name: It only sends

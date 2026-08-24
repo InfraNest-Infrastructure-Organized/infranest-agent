@@ -196,3 +196,45 @@ func TestParseMountsKeepsTheVisibleFilesystemWhenOneIsMountedOverAnother(t *test
 		t.Errorf("device = %q, want /dev/sdc1 — the shadowed mount was kept", got[0].device)
 	}
 }
+
+func TestBaseNameHandlesBothSeparators(t *testing.T) {
+	// filepath.Base follows the host separator, so a Windows path parsed on a Linux build comes back
+	// unchanged — which is exactly the case these tests are for, since Windows code cannot be run here.
+	cases := map[string]string{
+		`C:\Program Files\nginx\nginx.exe`: "nginx.exe",
+		`C:\Windows\System32\svchost.exe`:  "svchost.exe",
+		"/usr/bin/node":                    "node",
+		"nginx":                            "nginx",
+		"":                                 "",
+	}
+
+	for in, want := range cases {
+		if got := baseName(in); got != want {
+			t.Errorf("baseName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSplitNulUTF16SeparatesTheDriveList(t *testing.T) {
+	// GetLogicalDriveStringsW returns "C:\<NUL>D:\<NUL><NUL>". Reading it as one string yields a single
+	// entry containing every drive letter run together, which then matches no drive at all.
+	buf := []uint16{}
+	for _, s := range []string{`C:\`, `D:\`} {
+		for _, r := range s {
+			buf = append(buf, uint16(r))
+		}
+		buf = append(buf, 0)
+	}
+	buf = append(buf, 0)
+
+	got := splitNulUTF16(buf)
+	if len(got) != 2 || got[0] != `C:\` || got[1] != `D:\` {
+		t.Errorf("got %q, want [C:\\ D:\\]", got)
+	}
+}
+
+func TestSplitNulUTF16HandlesAnEmptyBlock(t *testing.T) {
+	if got := splitNulUTF16([]uint16{0, 0}); len(got) != 0 {
+		t.Errorf("got %q, want none", got)
+	}
+}
