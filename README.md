@@ -1,10 +1,31 @@
-# infranest-agent
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/infranest-logo-dark.svg">
+    <img alt="InfraNest" src=".github/assets/infranest-logo-light.svg" width="300">
+  </picture>
+</p>
+
+<h1 align="center">infranest-agent</h1>
+
+<p align="center">
+  <strong>It only ever sends.</strong><br>
+  No instructions, no execution, no open ports.
+</p>
+
+<p align="center">
+  <a href="https://github.com/InfraNest-Infrastructure-Organized/infranest-agent/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/InfraNest-Infrastructure-Organized/infranest-agent/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Dependencies: none" src="https://img.shields.io/badge/dependencies-none-brightgreen">
+  <img alt="Licence: Apache-2.0" src="https://img.shields.io/badge/licence-Apache--2.0-blue">
+</p>
+
+---
 
 The [InfraNest](https://infranest.app) monitoring agent. It reads a handful of numbers from the machine it
 runs on and posts them to your InfraNest account.
 
-**It only ever sends.** It takes no instructions, executes nothing, and opens no ports. There is no
-listening socket, no remote command channel, and the HTTP response is ignored beyond its status code.
+It takes no instructions, executes nothing, and opens no ports: there is no listening socket, no remote
+command channel, and the HTTP response is ignored beyond its status code. CI checks that mechanically on
+every commit — see [the invariant job](.github/workflows/ci.yml).
 
 ## See exactly what it would send
 
