@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# Actions are pinned to a full commit SHA, never a tag. A tag is a moving pointer the action's owner can
+# repoint at any time, and a compromised popular action is how CI supply-chain attacks have actually
+# happened. The trailing comment records which release each SHA was, so upgrades stay legible.
+#
 # Least privilege: nothing here needs to write to the repository.
 permissions:
   contents: read
@@ -14,8 +18,8 @@ jobs:
     name: Build, test and vet
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           check-latest: true
@@ -35,8 +39,8 @@ jobs:
     name: It only sends
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           check-latest: true
