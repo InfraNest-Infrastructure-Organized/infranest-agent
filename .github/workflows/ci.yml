@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: nothing here needs to write to the repository.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build, test and vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt'd:"; echo "$unformatted"; exit 1
+          fi
+
+      - run: go vet ./...
+      - run: go test -race ./...
+      - run: go build ./cmd/infranest-agent
+
+  invariant:
+    name: It only sends
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      # The promise in the README, checked rather than asserted. The agent must not be able to run a
+      # subprocess or accept an inbound connection — so the packages that would let it must not appear
+      # anywhere in the binary's dependency graph, transitively included.
+      #
+      # This is a build-graph check rather than a grep: an indirect import through a helper package would
+      # slip past a grep of our own source, and that is exactly how an invariant erodes.
+      - name: The agent cannot execute anything, or listen
+        run: |
+          deps=$(go list -deps ./cmd/infranest-agent)
+          fail=0
+          for pkg in os/exec net/rpc net/http/cgi net/http/fcgi; do
+            if echo "$deps" | grep -qx "$pkg"; then
+              echo "::error::$pkg is in the agent's dependency graph. The agent only sends: it runs nothing and serves nothing."
+              fail=1
+            fi
+          done
+          exit $fail
+
+      # `net` and `net/http` are legitimately needed to *make* a request, so their presence proves nothing
+      # either way. What must never appear is the act of binding a socket.
+      - name: The agent opens no listening socket
+        run: |
+          if grep -rnE '\b(net\.Listen|net\.ListenPacket|http\.ListenAndServe|http\.Serve|\.Accept\()' \
+               --include='*.go' . ; then
+            echo "::error::Something here binds or accepts on a socket. The agent exposes no local interface."
+            exit 1
+          fi
+
+      # Dependencies are the other supply chain. There should be none.
+      - name: No third-party dependencies
+        run: |
+          if [ -s go.sum ]; then
+            echo "::error::go.sum is not empty — a third-party dependency was added. See CONTRIBUTING.md."
+            exit 1
+          fi
+          # Standard-library import paths are lowercase letters, digits and slashes, and contain no dot.
+          # A dot is what makes a path a domain, so "has no dot" is the property that actually separates
+          # the standard library from everything else — `unicode/utf8` has a digit, `vendor/...` does not.
+          if go list -deps ./... | grep -vE '^(github\.com/InfraNest-Infrastructure-Organized/infranest-agent(/.*)?$)' | grep -E '\.' ; then
+            echo "::error::A package outside the standard library is in the graph. See CONTRIBUTING.md."
+            exit 1
+          fi
