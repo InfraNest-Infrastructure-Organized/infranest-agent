@@ -59,6 +59,17 @@ ProtectHostname=yes
 # fails the build if a unit-control method name ever appears in the source, because an invariant nobody
 # checks is an invariant that erodes.
 #
+# Verified on Ubuntu 24.04 / systemd 255, under exactly these settings:
+#
+#   systemd-run --uid=nobody -p ProtectSystem=strict \
+#     -p "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX" systemctl list-units --failed
+#
+# lists units, and the same command without AF_UNIX fails with "Address family not supported by
+# protocol". So ProtectSystem=strict does not block connecting to a unix socket — it is a permission
+# check on the inode rather than a write — and AF_UNIX is precisely and only what this needs. Worth
+# recording because the interaction is not obvious and the failure mode is a collector that silently
+# reports nothing.
+#
 # Set INFRANEST_SERVICES=0 in /etc/infranest/agent.conf to turn the collector off; the socket is then
 # never opened.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
