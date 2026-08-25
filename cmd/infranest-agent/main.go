@@ -2,7 +2,7 @@
 // InfraNest account.
 //
 // It only ever sends. It takes no instructions, executes nothing, and opens no ports: the HTTP response is
-// ignored beyond its status code, there is no listening socket, and nothing here runs a subprocess. CI
+// read only to be reported on, there is no listening socket, and nothing here runs a subprocess. CI
 // checks the first two by inspecting the dependency graph rather than trusting this comment.
 package main
 

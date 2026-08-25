@@ -169,6 +169,12 @@ func Adopt(current, offered string) (string, bool) {
 // being too strict costs a migration that has to be done another way, while being too loose would let a
 // fleet be pointed somewhere else for good. A public-suffix list would make this exactly right and would
 // mean vendoring a list that changes, in a binary whose whole claim is that it has no dependencies.
+//
+// It is sound because `infranest.app` has a single-label TLD. On a two-label one it would be too loose in
+// exactly the direction the paragraph above calls the dangerous one: under `example.co.uk` this reduces to
+// `co.uk`, so every UK domain would look like the same site. If the ingest host ever moves to such a
+// domain this stops being a guard, and nothing will say so — which is why it is written down here rather
+// than remembered.
 func registrable(host string) string {
 	labels := strings.Split(strings.ToLower(strings.TrimSuffix(host, ".")), ".")
 	if len(labels) < 2 {

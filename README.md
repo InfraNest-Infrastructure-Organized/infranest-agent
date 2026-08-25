@@ -23,9 +23,15 @@
 The [InfraNest](https://infranest.app) monitoring agent. It reads a handful of numbers from the machine it
 runs on and posts them to your InfraNest account.
 
-It takes no instructions, executes nothing, and opens no ports: there is no listening socket, no remote
-command channel, and the HTTP response is ignored beyond its status code. CI checks that mechanically on
-every commit — see [the invariant job](.github/workflows/ci.yml).
+It takes no instructions, executes nothing, and opens no ports: there is no listening socket and no remote
+command channel. CI checks that mechanically on every commit — see
+[the invariant job](.github/workflows/ci.yml).
+
+The one thing the server can influence is **where the next reading goes**. A reply may name a different
+ingest URL, and the agent adopts it only if it is HTTPS and on the same registrable domain — so it can be
+moved between our own hosts and cannot be pointed anywhere else by whoever manages to answer one push.
+Everything else in a reply is read to be *reported*: how many readings landed, which were refused and why,
+and how far this machine's clock is from ours. None of it runs anything.
 
 ## See exactly what it would send
 
@@ -70,6 +76,10 @@ provider API reports either.
 One static binary per architecture, built with `CGO_ENABLED=0`, so the same Linux build runs on glibc and
 musl alike — Debian, Ubuntu, RHEL, Alpine, and anything else with a mounted `/proc`. Linux on amd64,
 arm64, armv7, 386, riscv64, ppc64le and s390x; Windows on amd64 and arm64.
+
+macOS and FreeBSD binaries are published too, and collect nothing — they build so the compiler and `go vet`
+see that code on every commit, and running one tells you plainly that the platform is not implemented
+rather than reporting a machine full of zeros. Do not install them expecting readings.
 
 Windows collects CPU, memory, disk and uptime, and processes when asked. Two things Linux reports are
 absent there, and are left absent rather than approximated:

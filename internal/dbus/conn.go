@@ -252,8 +252,10 @@ func (c *Conn) readReply(serial uint32, member string) ([]byte, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
-		replySerial := d.uint32()
-		_ = replySerial
+		// This is the *message's own* serial, not the one it answers. The serial a reply is answering
+		// arrives as a header field below, which is why this is read only to advance past it — naming it
+		// otherwise is how somebody later matches replies against the wrong number.
+		d.uint32()
 		fieldsLen, err := checkedLen(d.uint32())
 		if err != nil {
 			return nil, "", err

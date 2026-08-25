@@ -208,6 +208,15 @@ func (d *decoder) skip(sig string) string {
 		d.skip(inner)
 	case 'a':
 		rest := sig[1:]
+		// An array signature with nothing after it is malformed — "a" is not a type, "as" is. Indexing
+		// into it below would be an index-out-of-range on a slice built from bytes the bus sent, which
+		// is a crash rather than the recorded failure this decoder promises. The whole reason for
+		// checking every read is that a monitoring agent must not die on a malformed reply.
+		if rest == "" {
+			d.fail("signature %q ends with an array of nothing", sig)
+
+			return ""
+		}
 		n := int(d.uint32())
 		if n < 0 || n > len(d.buf) {
 			d.fail("array claims %d bytes, which the reply does not have", n)
