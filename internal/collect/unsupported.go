@@ -15,6 +15,7 @@ type Options struct {
 	ProcessArgs  bool
 	MaxProcesses int
 	CPUInterval  time.Duration
+	Services     bool
 }
 
 // Collect reports honestly that this platform is not implemented rather than returning zeros.

@@ -150,6 +150,7 @@ func (r *Runner) collectOnce(seq int64, state *State) {
 		ProcessArgs:  r.Config.ProcessArgs,
 		MaxProcesses: 10,
 		CPUInterval:  300 * time.Millisecond,
+		Services:     r.Config.Services,
 	})
 	if err != nil {
 		r.logf("collection failed: %v", err)

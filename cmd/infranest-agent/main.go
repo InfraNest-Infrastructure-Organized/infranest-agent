@@ -90,6 +90,9 @@ func run(args []string, stdout, stderr *os.File) error {
 			ProcessArgs:  *withArgs,
 			MaxProcesses: 10,
 			CPUInterval:  300 * time.Millisecond,
+			// `print` shows what would be sent, so it shows this too — it is the fastest way for somebody
+			// to see which units the agent considers watched on their own machine.
+			Services: true,
 		})
 	case "run":
 		return runAgent(stdout, stderr, environment(*configPath))
@@ -234,6 +237,7 @@ Configuration (from the environment; systemd reads /etc/infranest/agent.conf):
   INFRANEST_STATE_DIR    spool and state              (default /var/lib/infranest-agent)
   INFRANEST_PROCESSES    collect the busiest processes
   INFRANEST_PROCESS_ARGS include command lines — these often contain credentials
+  INFRANEST_SERVICES     watch systemd units and report the failed ones (default on)
 
 A reading that cannot be delivered is kept on disk and sent when the connection comes
 back, so a network problem costs nothing but the delay.

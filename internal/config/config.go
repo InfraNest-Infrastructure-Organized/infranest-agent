@@ -42,6 +42,13 @@ type Config struct {
 	Processes   bool
 	ProcessArgs bool
 
+	// Services watches systemd units (#774) and defaults to **on**, which is the opposite of the two
+	// above and for the opposite reason: it carries no command lines and therefore no credentials, and
+	// the failure it catches moves no metric at all. A machine whose backup timer died looks perfectly
+	// healthy without it. `INFRANEST_SERVICES=0` turns it off for anyone who would rather it did not
+	// talk to the system bus.
+	Services bool
+
 	// StateDir holds the spool and the last-run record. Everything in it is disposable: losing it costs
 	// undelivered readings and nothing else.
 	StateDir string
@@ -58,11 +65,13 @@ func Load(getenv func(string) string) (Config, error) {
 	getenv = withFileFallback(getenv)
 
 	c := Config{
-		Token:       strings.TrimSpace(getenv("INFRANEST_TOKEN")),
-		URL:         strings.TrimSpace(getenv("INFRANEST_URL")),
-		StateDir:    strings.TrimSpace(getenv("INFRANEST_STATE_DIR")),
-		Interval:    time.Minute,
-		Processes:   truthy(getenv("INFRANEST_PROCESSES")),
+		Token:     strings.TrimSpace(getenv("INFRANEST_TOKEN")),
+		URL:       strings.TrimSpace(getenv("INFRANEST_URL")),
+		StateDir:  strings.TrimSpace(getenv("INFRANEST_STATE_DIR")),
+		Interval:  time.Minute,
+		Processes: truthy(getenv("INFRANEST_PROCESSES")),
+		// Default-on, so absence means yes and only an explicit falsey value turns it off.
+		Services:    !falsey(getenv("INFRANEST_SERVICES")),
 		ProcessArgs: truthy(getenv("INFRANEST_PROCESS_ARGS")),
 	}
 
@@ -175,6 +184,17 @@ func registrable(host string) string {
 // trailing slash, a path, or a bare host all end up at the same place.
 func (c Config) PushURL() string {
 	return strings.TrimRight(c.URL, "/") + "/api/metrics/push"
+}
+
+// falsey is truthy's opposite for a default-on setting: only an explicit no counts, so an unset variable
+// and a misspelled one both leave the collector running rather than silently disabling it.
+func falsey(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "0", "false", "no", "off":
+		return true
+	default:
+		return false
+	}
 }
 
 func truthy(v string) bool {

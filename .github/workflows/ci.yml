@@ -105,6 +105,19 @@ jobs:
             exit 1
           fi
 
+      # The agent reads systemd's state and cannot change it (#774). The operating system already refuses
+      # — unit control is gated behind polkit and this service has no session to authenticate with — so
+      # this check is not the security boundary. It is here for the same reason the os/exec one is: to
+      # keep a deliberate restraint from eroding one convenient-looking commit at a time, and to make the
+      # claim in the README something a reader can verify rather than take on trust.
+      - name: The agent can read systemd, and cannot command it
+        run: |
+          if grep -rnE '"(StartUnit|StopUnit|RestartUnit|ReloadUnit|KillUnit|TryRestartUnit|ReloadOrRestartUnit|EnableUnitFiles|DisableUnitFiles|MaskUnitFiles|SetUnitProperties|Reexecute)"' \
+               --include='*.go' . ; then
+            echo "::error::A unit-control method name is in the source. The agent only reads systemd's state."
+            exit 1
+          fi
+
       # Dependencies are the other supply chain. There should be none.
       - name: No third-party dependencies
         run: |

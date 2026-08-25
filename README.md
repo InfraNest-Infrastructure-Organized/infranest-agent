@@ -49,7 +49,17 @@ is the first thing documented rather than a debugging flag buried at the bottom.
 | **Load average** | 1 / 5 / 15 minute |
 | **Uptime** | seconds since boot |
 | **Processes** | the largest few by memory, off by default. Sorted by memory rather than CPU because a CPU share needs two readings per process, which means walking all of `/proc` twice. **Arguments are omitted** — command lines routinely carry credentials, so the executable name is what gets sent unless you ask otherwise |
-| **Services** | the state of watched systemd units — *not implemented yet* |
+| **Services** | systemd units that were set up to run, and which of them have failed. Watched set is "enabled, plus anything currently failed", so it works with no configuration. Read over D-Bus; nothing here can start, stop or restart a unit |
+
+A failed unit is worth its own line here because it is the failure that moves no number: a backup timer
+that died leaves CPU, memory, disk and load exactly where they were, and the machine looks perfectly
+healthy until somebody needs the backup.
+
+Reading it needs the systemd D-Bus socket, which is the one place this agent talks to something other than
+InfraNest. It cannot command systemd — `StartUnit` and its relatives are gated behind polkit and this
+service has no session to authenticate with, so the restriction is the operating system's rather than a
+promise about our code. CI fails the build if a unit-control method name ever appears in the source.
+`INFRANEST_SERVICES=0` turns the collector off, and the socket is then never opened.
 
 Memory, disk space, load average and processes cannot be read from a cloud provider's API at all. They are
 the reason this exists: a full disk and an out-of-memory kill are what actually take a server down, and no
@@ -224,6 +234,7 @@ All optional except the token, and all set for you by the installer.
 | `INFRANEST_STATE_DIR` | spool and state. Default `/var/lib/infranest-agent` |
 | `INFRANEST_PROCESSES` | collect the busiest processes. Off by default |
 | `INFRANEST_PROCESS_ARGS` | include full command lines. Off by default, and for good reason — see below |
+| `INFRANEST_SERVICES` | watch systemd units and report the ones that have failed. **On** by default — see below |
 
 `INFRANEST_URL` must be `https`. The token is a bearer credential and this is the wire it crosses; there
 is no configuration for which plaintext is the right trade, so the agent refuses to start rather than

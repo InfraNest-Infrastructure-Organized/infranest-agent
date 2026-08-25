@@ -20,6 +20,11 @@ type Options struct {
 	ProcessArgs bool
 	// MaxProcesses bounds the list. The server caps it too; sending more just wastes both ends.
 	MaxProcesses int
+
+	// Services turns the systemd unit collector on (#774). On by default, unlike the process list: it
+	// carries no command lines and therefore no credentials, and the failure it catches — a unit that has
+	// given up — moves no metric at all, so a server without it looks healthy while it is not.
+	Services bool
 	// CPUInterval is how long to wait between the two /proc/stat readings a percentage needs.
 	CPUInterval time.Duration
 }
@@ -74,6 +79,17 @@ func Collect(opts Options) (Sample, error) {
 			s.fail("processes", err)
 		} else {
 			s.Processes = procs
+		}
+	}
+
+	if opts.Services {
+		// Failure here is recorded like any other collector's and never raised. There are ordinary
+		// reasons for it — a container with no D-Bus socket, a sandbox that will not allow AF_UNIX, a
+		// machine that does not run systemd at all — and none of them should cost the reading beside it.
+		if services, err := CollectServices(); err != nil {
+			s.fail("services", err)
+		} else {
+			s.Services = services
 		}
 	}
 

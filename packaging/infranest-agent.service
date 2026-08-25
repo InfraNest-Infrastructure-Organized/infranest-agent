@@ -44,8 +44,24 @@ ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
 
-# It speaks IP and nothing else — no unix sockets, no netlink, no raw packets.
-RestrictAddressFamilies=AF_INET AF_INET6
+# IP for sending, and unix sockets for one thing: asking systemd what it was told to run (#774).
+#
+# AF_UNIX is here because there is no other way to read a unit's state. There is no file that says a unit
+# has failed — /run/systemd distinguishes running from not-running, not failed from deliberately stopped —
+# and `systemctl` would not avoid this socket, only reach it through a subprocess, which is the thing this
+# agent does not do.
+#
+# What it does not permit is worth stating, because the obvious worry is the wrong one. The agent cannot
+# start, stop, restart or kill a unit, and not because it chooses not to: those calls are gated behind
+# polkit's org.freedesktop.systemd1.manage-units, which requires an authenticated administrator. This
+# service has no login session and no way to become one, and on a machine without polkit systemd allows
+# uid 0 only. The read-only property is the operating system's, not a promise about our code — though CI
+# fails the build if a unit-control method name ever appears in the source, because an invariant nobody
+# checks is an invariant that erodes.
+#
+# Set INFRANEST_SERVICES=0 in /etc/infranest/agent.conf to turn the collector off; the socket is then
+# never opened.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=yes
 RestrictRealtime=yes
 SystemCallFilter=@system-service

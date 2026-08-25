@@ -28,6 +28,10 @@ type Sample struct {
 	Mounts    []Mount   `json:"mounts,omitempty"`
 	Processes []Process `json:"processes,omitempty"`
 
+	// The watched service units (#774). Absent when the collector could not ask — which the server reads
+	// as "no answer" and not as "nothing has failed", because those need opposite things said about them.
+	Services []Service `json:"services,omitempty"`
+
 	// What the machine says about itself: kernel, OS, pending updates, reboot required (#767). Changes
 	// rarely, so it rides on every sample rather than having a cadence of its own — it is four short
 	// strings and two integers, which is cheaper than the bookkeeping a schedule would need.
@@ -48,6 +52,22 @@ type Mount struct {
 	Device     string `json:"device,omitempty"`
 	UsedBytes  int64  `json:"used_bytes"`
 	TotalBytes int64  `json:"total_bytes"`
+}
+
+// Service is one unit the machine was told to run, and what became of it.
+//
+// systemd's own vocabulary, sent verbatim rather than mapped to ours: ActiveState is one of
+// active/inactive/failed/activating/deactivating, and SubState is the per-unit-type detail. Deciding what
+// "exited" means for a oneshot unit is a judgement the page can make with the whole picture, and the
+// collector cannot.
+type Service struct {
+	Unit        string `json:"unit"`
+	Description string `json:"description,omitempty"`
+	ActiveState string `json:"active_state"`
+	SubState    string `json:"sub_state,omitempty"`
+	// systemd's record of when the unit entered its current state. Only fetched for units that have
+	// failed — it is one call each, and on a healthy machine there are none.
+	StateChangedAt *time.Time `json:"state_changed_at,omitempty"`
 }
 
 // Process is one of the busiest few. Command carries no arguments unless the operator turned them on:
