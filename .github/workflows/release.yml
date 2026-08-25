@@ -10,6 +10,12 @@ on:
 
 permissions:
   contents: write
+  # What keyless signing needs, and the reason it needs no key: `id-token` lets this job prove to
+  # Sigstore that it is this workflow in this repository, and a short-lived certificate is issued
+  # against that. There is nothing stored to leak, and nothing for a repository compromise to steal that
+  # it did not already have.
+  id-token: write
+  attestations: write
 
 jobs:
   build:
@@ -119,6 +125,21 @@ jobs:
           done
           sha256sum infranest-agent_* > SHA256SUMS
           cat SHA256SUMS
+
+      # Keyless: no private key exists, here or anywhere. The attestation records which commit, which
+      # workflow and which runner produced these exact bytes, and lands in a public transparency log —
+      # so a forged release is attributable rather than deniable, which is the property an offline key
+      # held by one person cannot offer once that person is asleep.
+      #
+      # Chosen over `cosign` directly because customers verify with `gh attestation verify`, and asking
+      # somebody to install a large third-party binary to check a zero-dependency agent is an odd shape.
+      #
+      # It proves *who built this*. It does not prove the source is good — the reproducible build above
+      # is what answers that, and it needs no third party at all. The release notes say so in that order.
+      - name: Attest what was built
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'dist/infranest-agent_*'
 
       - name: Publish
         env:

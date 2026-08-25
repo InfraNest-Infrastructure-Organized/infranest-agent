@@ -10,6 +10,20 @@ sha256sum -c infranest-agent_linux_amd64.sha256
 That checks the download arrived intact. It does **not** prove the release is what the source says — the
 binary and the checksum come from the same place, so anyone who could replace one could replace both.
 
+## Check who built it
+
+```
+gh attestation verify infranest-agent_linux_amd64 \
+  --repo InfraNest-Infrastructure-Organized/infranest-agent
+```
+
+Every artefact here carries a build attestation: which commit, which workflow, which runner. It is
+signed without a key — a short-lived certificate issued to this workflow and recorded in a public
+transparency log — so there is no signing key anywhere to be stolen or lost, and a forged release would
+be attributable rather than deniable.
+
+This proves who built the binary. It does not prove the source is what you think it is.
+
 ## Or rebuild it yourself, which does
 
 ```

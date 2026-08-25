@@ -113,6 +113,25 @@ irm https://get.infranest.app/agent.ps1 -OutFile agent.ps1
 .\agent.ps1 -Token sat_YOUR_TOKEN
 ```
 
+### Verifying a release before you install it
+
+The installer already refuses to install a binary whose checksum does not match. If you want to check
+more than that, each release carries a build attestation and is reproducible:
+
+```sh
+# Who built it — which commit, which workflow, which runner.
+gh attestation verify infranest-agent_linux_amd64 \
+  --repo InfraNest-Infrastructure-Organized/infranest-agent
+
+# What it is. Clone the tag, build it, compare the hash to SHA256SUMS.
+# This one needs no trust in us at all.
+CGO_ENABLED=0 go build -trimpath -o /tmp/infranest-agent ./cmd/infranest-agent
+```
+
+There is no signing key anywhere — releases are signed with a short-lived certificate issued to the
+release workflow and recorded in a public transparency log, so there is nothing to steal and a forged
+release is attributable rather than deniable. Full instructions are on every release.
+
 ### What the installer does
 
 No surprises, in this order:
