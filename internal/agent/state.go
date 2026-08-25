@@ -33,6 +33,11 @@ type State struct {
 	// and because this half is readable when the network is not.
 	CollectorErrors map[string]string `json:"collector_errors,omitempty"`
 
+	// When the disk was last walked. Persisted so a restart does not re-walk immediately — an agent
+	// restarting in a loop would otherwise scan every time it came up, which is the most expensive thing
+	// it can do, on a machine already having a bad day.
+	LastUsageScanAt time.Time `json:"last_usage_scan_at,omitempty"`
+
 	// Where readings are being sent, after any redirect the server asked for. Persisted so a restart does
 	// not undo a migration and quietly send the fleet back to the old host.
 	URL string `json:"url,omitempty"`

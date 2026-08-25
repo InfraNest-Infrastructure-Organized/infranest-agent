@@ -82,10 +82,10 @@ func New(token, version string) *Client {
 }
 
 // Send posts a batch of readings and reports what the server did with them.
-func (c *Client) Send(ctx context.Context, url string, samples []json.RawMessage, failed map[string]string) (Result, error) {
+func (c *Client) Send(ctx context.Context, url string, samples []json.RawMessage, failed map[string]string, usage any) (Result, error) {
 	var result Result
 
-	body, err := encode(samples, failed, c.Version)
+	body, err := encode(samples, failed, c.Version, usage)
 	if err != nil {
 		return result, err
 	}
@@ -150,12 +150,17 @@ func (c *Client) Send(ctx context.Context, url string, samples []json.RawMessage
 // `samples` are already-marshalled readings straight from the spool, so a reading is written once when it
 // is collected and never re-encoded — which is also what keeps a reading that was collected by an older
 // version of the agent sendable by a newer one.
-func encode(samples []json.RawMessage, failed map[string]string, version string) ([]byte, error) {
+func encode(samples []json.RawMessage, failed map[string]string, version string, usage any) ([]byte, error) {
 	payload := struct {
 		Samples      []json.RawMessage `json:"samples"`
 		Failed       map[string]string `json:"failed,omitempty"`
 		AgentVersion string            `json:"agent_version,omitempty"`
-	}{Samples: samples, Failed: failed, AgentVersion: version}
+		// A directory listing rides along on whichever push follows a scan, rather than having a delivery
+		// path of its own. The sending half already has retry, backoff and a spool; a second one for a
+		// single payload would be a second thing to get wrong. Omitted entirely on the pushes between
+		// scans, which is nearly all of them.
+		DiskUsage any `json:"disk_usage,omitempty"`
+	}{Samples: samples, Failed: failed, AgentVersion: version, DiskUsage: usage}
 
 	body, err := json.Marshal(payload)
 	if err != nil {

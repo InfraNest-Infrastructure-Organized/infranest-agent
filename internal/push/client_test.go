@@ -28,7 +28,7 @@ func send(t *testing.T, handler http.HandlerFunc, samples ...string) (Result, er
 	c.HTTP = srv.Client()
 	c.HTTP.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
-	return c.Send(context.Background(), srv.URL, raw, nil)
+	return c.Send(context.Background(), srv.URL, raw, nil, nil)
 }
 
 func TestTheBodyIsAlwaysABatch(t *testing.T) {
@@ -134,5 +134,52 @@ func TestAnUnparseableBodyIsNotFatalOnItsOwn(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "502") {
 		t.Fatalf("expected the status code to be the answer, got %v", err)
+	}
+}
+
+func TestAPushWithoutAScanDoesNotCarryTheField(t *testing.T) {
+	// Nearly every push is between scans, and `"disk_usage": null` on all of them is both noise on the
+	// wire and a lie: null reads as "walked, and found nothing".
+	//
+	// This is the wire half of a trap the runner tests also cover. A nil `*UsageScan` in an `any` is a
+	// non-nil interface holding a nil pointer, and `omitempty` does not suppress it — so the field
+	// appeared on every push while the code looked exactly right.
+	var raw map[string]any
+
+	_, err := send(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&raw)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"accepted":1}`))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, present := raw["disk_usage"]; present {
+		t.Fatalf("a push with no scan carried disk_usage: %v", raw["disk_usage"])
+	}
+}
+
+func TestAScanRidesAlongOnThePushAfterIt(t *testing.T) {
+	var raw map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&raw)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"accepted":1}`))
+	}))
+	defer srv.Close()
+
+	c := New("sat_test", "1.0.0")
+	c.HTTP = srv.Client()
+
+	scan := map[string]any{"mount_point": "/var", "dirs": []any{}}
+	if _, err := c.Send(context.Background(), srv.URL, []json.RawMessage{json.RawMessage(`{"cpu_percent":1}`)}, nil, scan); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := raw["disk_usage"].(map[string]any)
+	if !ok || got["mount_point"] != "/var" {
+		t.Fatalf("the scan did not reach the wire: %v", raw["disk_usage"])
 	}
 }

@@ -18,14 +18,18 @@ import (
 
 // fakeSender records what it was asked to send and answers however the test wants.
 type fakeSender struct {
-	batches [][]json.RawMessage
-	urls    []string
-	answer  func(n int) (push.Result, error)
+	batches    [][]json.RawMessage
+	urls       []string
+	usageSends int
+	answer     func(n int) (push.Result, error)
 }
 
-func (f *fakeSender) Send(_ context.Context, url string, samples []json.RawMessage, _ map[string]string) (push.Result, error) {
+func (f *fakeSender) Send(_ context.Context, url string, samples []json.RawMessage, _ map[string]string, usage any) (push.Result, error) {
 	f.batches = append(f.batches, samples)
 	f.urls = append(f.urls, url)
+	if usage != nil {
+		f.usageSends++
+	}
 
 	if f.answer != nil {
 		return f.answer(len(f.batches))
@@ -341,5 +345,114 @@ func TestARefusalOfTheRequestItselfKeepsTheReadings(t *testing.T) {
 	// count, opposite outcome. These readings accumulate because nothing has said anything about them.
 	if r.Spool.Len() < 2 {
 		t.Fatalf("readings were dropped on a failure that said nothing about them (spool holds %d)", r.Spool.Len())
+	}
+}
+
+func TestTheDiskIsWalkedOnceAnHourAtMost(t *testing.T) {
+	// The walk is seconds of work where a sample is milliseconds. Doing it every tick would make the
+	// agent the heaviest thing on the machine, which is the one failure a monitoring agent must not have.
+	sender := &fakeSender{}
+
+	dir := t.TempDir()
+	sp, err := spool.New(filepath.Join(dir, "spool"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clock := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	fired, scans := 0, 0
+
+	r := &Runner{
+		Config: config.Config{Token: "sat_x", URL: "https://ingest.infranest.app", Interval: time.Minute, StateDir: dir},
+		Sender: sender,
+		Spool:  sp,
+		Log:    &strings.Builder{},
+		Now:    func() time.Time { return clock },
+		Collect: func(collect.Options) (collect.Sample, error) {
+			return collect.Sample{
+				CollectedAt: clock,
+				Mounts: []collect.Mount{
+					{MountPoint: "/", UsedBytes: 30, TotalBytes: 100},
+					{MountPoint: "/var", UsedBytes: 87, TotalBytes: 100},
+				},
+			}, nil
+		},
+		ScanUsage: func(_ context.Context, mount string) collect.UsageScan {
+			scans++
+			// The fullest mount, not the first: that is the one a forecast is about and the one somebody
+			// wants attributed.
+			if mount != "/var" {
+				t.Errorf("walked %q, expected the fullest mount", mount)
+			}
+
+			return collect.UsageScan{MountPoint: mount, Dirs: []collect.DirUsage{{Path: "/var/log", Bytes: 99}}}
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	r.After = func(d time.Duration) <-chan time.Time {
+		fired++
+		clock = clock.Add(d)
+		if fired >= 10 {
+			cancel()
+		}
+		ch := make(chan time.Time, 1)
+		ch <- clock
+
+		return ch
+	}
+	if err := r.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ten minute-long ticks: one scan, not ten.
+	if scans != 1 {
+		t.Fatalf("walked the disk %d times in ten minutes", scans)
+	}
+	// And it went out exactly once — held for the next push, then cleared.
+	if sender.usageSends != 1 {
+		t.Fatalf("the scan was sent %d times", sender.usageSends)
+	}
+}
+
+func TestAScanIsNotResentAfterItLands(t *testing.T) {
+	// Unlike a reading it is not spooled: a directory listing an hour old is worth less than the one the
+	// next scan will produce, and queueing them would send a backlog of stale answers after an outage.
+	sender := &fakeSender{}
+	dir := t.TempDir()
+	sp, _ := spool.New(filepath.Join(dir, "spool"))
+	clock := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	fired := 0
+
+	r := &Runner{
+		Config: config.Config{Token: "sat_x", URL: "https://ingest.infranest.app", Interval: time.Minute, StateDir: dir},
+		Sender: sender,
+		Spool:  sp,
+		Log:    &strings.Builder{},
+		Now:    func() time.Time { return clock },
+		Collect: func(collect.Options) (collect.Sample, error) {
+			return collect.Sample{CollectedAt: clock, Mounts: []collect.Mount{{MountPoint: "/", UsedBytes: 50, TotalBytes: 100}}}, nil
+		},
+		ScanUsage: func(_ context.Context, mount string) collect.UsageScan {
+			return collect.UsageScan{MountPoint: mount}
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	r.After = func(d time.Duration) <-chan time.Time {
+		fired++
+		clock = clock.Add(d)
+		if fired >= 5 {
+			cancel()
+		}
+		ch := make(chan time.Time, 1)
+		ch <- clock
+
+		return ch
+	}
+	_ = r.Run(ctx)
+
+	if sender.usageSends != 1 {
+		t.Fatalf("the same scan rode along on %d pushes", sender.usageSends)
 	}
 }

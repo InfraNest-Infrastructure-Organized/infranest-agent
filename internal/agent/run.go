@@ -30,10 +30,17 @@ const (
 	maxBackoff = 15 * time.Minute
 )
 
+// usageInterval is how often the disk is walked to answer "what is filling this".
+//
+// Hourly, and only the fullest mount. The walk is seconds of work where a sample is milliseconds, so
+// doing it every tick would make the agent the heaviest thing on the machine — and a directory that grew
+// enough to matter in under an hour is one the threshold alert has already caught.
+const usageInterval = time.Hour
+
 // Sender is what Run pushes through. An interface so the loop can be tested without a network, which is
 // the only way its retry and backoff behaviour is testable at all.
 type Sender interface {
-	Send(ctx context.Context, url string, samples []json.RawMessage, failed map[string]string) (push.Result, error)
+	Send(ctx context.Context, url string, samples []json.RawMessage, failed map[string]string, usage any) (push.Result, error)
 }
 
 type Runner struct {
@@ -48,9 +55,19 @@ type Runner struct {
 	// this is built for. Left nil it is the real collector.
 	Collect func(collect.Options) (collect.Sample, error)
 
+	// ScanUsage is injected for the same reason as Collect: the *scheduling* of the walk is what this
+	// package owns, and it should be testable without a filesystem to walk.
+	ScanUsage func(context.Context, string) collect.UsageScan
+
 	// Now and After are injected so the loop's timing is testable. Left nil they are the real ones.
 	Now   func() time.Time
 	After func(time.Duration) <-chan time.Time
+
+	// The mounts the last reading saw, so the walk knows which one to attribute without measuring again.
+	lastMounts []collect.Mount
+
+	// A finished scan waiting for the next push. Not spooled — see sendOnce.
+	pendingUsage *collect.UsageScan
 }
 
 // Run collects on a fixed cadence and delivers whatever is waiting, until the context is cancelled.
@@ -84,6 +101,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	for {
 		seq++
 		r.collectOnce(seq, &state)
+		r.scanUsageIfDue(ctx, &state)
 
 		if backoff > 0 {
 			r.logf("waiting %s before the next attempt", backoff.Round(time.Second))
@@ -137,10 +155,60 @@ func (r *Runner) collectOnce(seq int64, state *State) {
 	// unreadable since Tuesday" is a different problem from "we cannot reach InfraNest", and on a machine
 	// that cannot reach us this is the only place either is visible.
 	state.CollectorErrors = sample.Failed
+	r.lastMounts = sample.Mounts
 
 	if err := r.Spool.Add(seq, sample); err != nil {
 		r.logf("could not spool the reading: %v", err)
 	}
+}
+
+// scanUsageIfDue walks the fullest mount, at most once an hour, and holds the answer for the next push.
+//
+// Only the fullest mount, deliberately. It is the one a forecast is about and the one somebody wants
+// attributed — walking every mount would multiply the cost by the number of filesystems for answers
+// nobody asked for. The walk is bounded inside `collect.ScanUsage`; the schedule is bounded here.
+//
+// Held rather than sent immediately, because the sending half already exists and has retry, backoff and a
+// spool. A second delivery path for this one payload would be a second thing to get wrong.
+func (r *Runner) scanUsageIfDue(ctx context.Context, state *State) {
+	if !state.LastUsageScanAt.IsZero() && r.Now().Sub(state.LastUsageScanAt) < usageInterval {
+		return
+	}
+
+	mount := r.fullestMount()
+	if mount == "" {
+		return
+	}
+
+	scan := r.ScanUsage(ctx, mount)
+	r.pendingUsage = &scan
+	state.LastUsageScanAt = r.Now()
+
+	if scan.Partial {
+		r.logf("disk usage scan of %s ran out of budget — reporting what it found", mount)
+	}
+}
+
+// fullestMount is the mount the last reading said was closest to full.
+//
+// From the reading rather than a fresh statfs: the sample was taken moments ago and re-measuring would be
+// a second answer to a question already asked, which is how two numbers on one page come to disagree.
+func (r *Runner) fullestMount() string {
+	var (
+		point string
+		worst float64
+	)
+
+	for _, m := range r.lastMounts {
+		if m.TotalBytes <= 0 {
+			continue
+		}
+		if used := float64(m.UsedBytes) / float64(m.TotalBytes); used > worst {
+			worst, point = used, m.MountPoint
+		}
+	}
+
+	return point
 }
 
 // sendOnce delivers what is waiting, and records what happened where `status` can find it.
@@ -162,7 +230,16 @@ func (r *Runner) sendOnce(ctx context.Context, url *string, state *State) error 
 
 	state.LastAttemptAt = r.Now()
 
-	result, err := r.Sender.Send(ctx, *url, samples, nil)
+	// Explicitly untyped when there is nothing to send. A nil `*collect.UsageScan` placed in an `any`
+	// is a **non-nil interface holding a nil pointer** — so passing the field directly made every push
+	// carry `"disk_usage": null`, and `omitempty` does not suppress it because the interface is not nil.
+	// One of Go's oldest traps, and it survives review by looking exactly right.
+	var usage any
+	if r.pendingUsage != nil {
+		usage = r.pendingUsage
+	}
+
+	result, err := r.Sender.Send(ctx, *url, samples, nil, usage)
 
 	if !result.ServerTime.IsZero() {
 		// Measured against our own clock at the moment we asked, which is close enough: the request
@@ -191,6 +268,11 @@ func (r *Runner) sendOnce(ctx context.Context, url *string, state *State) error 
 
 		return err
 	}
+
+	// Delivered, so it is not offered again. Unlike a reading it is not spooled: a directory listing an
+	// hour old is worth less than the one the next scan will produce, and queueing them would send a
+	// backlog of stale answers after an outage.
+	r.pendingUsage = nil
 
 	// Only now. A reading is deleted when the server has said it stored it — never when the request
 	// merely completed, because a 502 from something in front of us completes too.
@@ -233,6 +315,9 @@ func (r *Runner) defaults() {
 	}
 	if r.Collect == nil {
 		r.Collect = collect.Collect
+	}
+	if r.ScanUsage == nil {
+		r.ScanUsage = collect.ScanUsage
 	}
 }
 
