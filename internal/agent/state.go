@@ -28,6 +28,13 @@ type State struct {
 	TokenRejected   bool      `json:"token_rejected,omitempty"`
 	TokenRejectedAt time.Time `json:"token_rejected_at,omitempty"`
 
+	// Set when InfraNest says monitoring is switched off for this server. Kept apart from
+	// TokenRejected — both arrive as a 403 — because the fix is somewhere else and by somebody else:
+	// this one is switched back on in InfraNest and the agent resumes without anyone touching the
+	// machine. Told to reinstall instead, an operator replaces a working agent and nothing changes.
+	NotActivated   bool      `json:"not_activated,omitempty"`
+	NotActivatedAt time.Time `json:"not_activated_at,omitempty"`
+
 	// What each collector last said, by name — empty when they all worked. The same map the server now
 	// stores, kept here too because the machine is where somebody looks when a chart has a hole in it,
 	// and because this half is readable when the network is not.

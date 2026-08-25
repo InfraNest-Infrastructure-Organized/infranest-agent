@@ -183,3 +183,35 @@ func TestAScanRidesAlongOnThePushAfterIt(t *testing.T) {
 		t.Fatalf("the scan did not reach the wire: %v", raw["disk_usage"])
 	}
 }
+
+func TestDeactivatedMonitoringIsNotAReachedTokenProblem(t *testing.T) {
+	// Both arrive as 403 and the reason code is the only thing that separates them. Read as a rejected
+	// token, `status` tells an operator to install a new one — which replaces a working agent, costs an
+	// afternoon and changes nothing, because the switch is in InfraNest and not on this machine.
+	_, err := send(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"Monitoring is not switched on for this server in InfraNest.","reason":"monitoring_not_activated","accepted":0}`))
+	})
+
+	if !errors.Is(err, ErrNotActivated) {
+		t.Fatalf("expected a not-activated refusal, got %v", err)
+	}
+	if errors.Is(err, ErrTokenRejected) {
+		t.Fatal("a deactivated server was reported as a rejected token")
+	}
+}
+
+func TestAForbiddenWithoutAReasonIsStillARejectedToken(t *testing.T) {
+	// The reason field is additive: an older server, or any other 403, must keep the behaviour it had.
+	_, err := send(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"Invalid server agent token."}`))
+	})
+
+	if !errors.Is(err, ErrTokenRejected) {
+		t.Fatalf("expected a rejected token, got %v", err)
+	}
+	if errors.Is(err, ErrNotActivated) {
+		t.Fatal("a rejected token was reported as deactivated monitoring")
+	}
+}

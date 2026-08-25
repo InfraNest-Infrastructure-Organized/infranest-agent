@@ -456,3 +456,60 @@ func TestAScanIsNotResentAfterItLands(t *testing.T) {
 		t.Fatalf("the same scan rode along on %d pushes", sender.usageSends)
 	}
 }
+
+func TestDeactivatedMonitoringBacksOffAndKeepsTheReadings(t *testing.T) {
+	// The agent cannot be told to stop — it holds no connection and takes no instructions — so a server
+	// whose monitoring is switched off keeps offering readings for as long as the machine runs. Backing
+	// off is what stops that being 4,320 requests a day for an answer that has not changed.
+	sender := &fakeSender{answer: func(int) (push.Result, error) {
+		return push.Result{}, push.ErrNotActivated
+	}}
+
+	r, spool, waits := harness(t, sender, 4)
+
+	state := LoadState(r.Config.StateDir)
+	if !state.NotActivated {
+		t.Fatal("expected the refusal to be recorded where status can find it")
+	}
+	if state.NotActivatedAt.IsZero() {
+		t.Fatal("expected the time of the refusal to be recorded")
+	}
+	// Not the same flag. Told it is a token problem, an operator replaces a working agent and nothing
+	// changes, because the switch is in InfraNest rather than on this machine.
+	if state.TokenRejected {
+		t.Fatal("a deactivated server was recorded as a rejected token")
+	}
+	if last := (*waits)[len(*waits)-1]; last < maxBackoff {
+		t.Fatalf("expected the agent to back off to %s, but it asked to wait %s", maxBackoff, last)
+	}
+	// Kept, not dropped: switching monitoring back on should not have cost the minutes in between, and
+	// the spool's own cap is what stops it growing without bound.
+	if spool.Len() == 0 {
+		t.Fatal("readings were discarded for a refusal that is reversible from the other end")
+	}
+}
+
+func TestStatusTellsSomebodyNotToReinstallAWorkingAgent(t *testing.T) {
+	// The one failure whose obvious response is the wrong one. "InfraNest is refusing this" reads as a
+	// dead credential, and the answer to a dead credential is to install a new one — which replaces an
+	// agent that is working perfectly and changes nothing.
+	dir := t.TempDir()
+	cfg := config.Config{URL: "https://ingest.infranest.app", Interval: time.Minute, StateDir: dir}
+
+	if err := SaveState(dir, State{NotActivated: true, NotActivatedAt: time.Now().Add(-2 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := &strings.Builder{}
+	Status(out, cfg, time.Now())
+
+	got := out.String()
+	for _, want := range []string{"NOT SENDING", "switched off for this server", "Do not reinstall"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("status did not mention %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "rejected this token") {
+		t.Fatalf("status blamed the token for a server nobody switched on:\n%s", got)
+	}
+}

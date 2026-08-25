@@ -123,6 +123,12 @@ func (r *Runner) Run(ctx context.Context) error {
 		switch {
 		case sendErr == nil:
 			backoff = 0
+		case errors.Is(sendErr, push.ErrNotActivated):
+			// Same slow retry as a rejected token, and for a stronger reason: the agent cannot be told
+			// to stop, so it will keep offering readings for as long as the machine runs. Backing off
+			// means InfraNest is not asked 4,320 times a day for an answer that has not changed — while
+			// still resuming on its own, within the hour, when somebody switches it back on.
+			backoff = maxBackoff
 		case errors.Is(sendErr, push.ErrTokenRejected):
 			// Not retried quickly, and not fatal. Somebody deleting the token in InfraNest is how the
 			// agent is turned off from the other end; hammering an endpoint that has said no writes an
@@ -263,6 +269,10 @@ func (r *Runner) sendOnce(ctx context.Context, url *string, state *State) error 
 		if state.TokenRejected && state.TokenRejectedAt.IsZero() {
 			state.TokenRejectedAt = r.Now()
 		}
+		state.NotActivated = errors.Is(err, push.ErrNotActivated)
+		if state.NotActivated && state.NotActivatedAt.IsZero() {
+			state.NotActivatedAt = r.Now()
+		}
 		r.logf("push failed: %v", err)
 		r.save(*state)
 
@@ -282,6 +292,8 @@ func (r *Runner) sendOnce(ctx context.Context, url *string, state *State) error 
 	state.LastError = ""
 	state.TokenRejected = false
 	state.TokenRejectedAt = time.Time{}
+	state.NotActivated = false
+	state.NotActivatedAt = time.Time{}
 
 	for _, s := range result.Skipped {
 		// A refusal is not an error, and must not be silent either: "your clock is eight minutes fast"

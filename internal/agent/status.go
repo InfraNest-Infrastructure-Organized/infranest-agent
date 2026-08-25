@@ -40,6 +40,15 @@ func Status(w io.Writer, cfg config.Config, now time.Time) {
 	fmt.Fprintln(w)
 
 	switch {
+	case state.NotActivated:
+		// Named before the token case and worded to stop the obvious wrong move. The natural reading of
+		// "InfraNest is refusing this" is that the credential is dead, and the natural response to a dead
+		// credential is to reinstall — which replaces a working agent, costs somebody an afternoon and
+		// changes nothing, because the switch is on the other side.
+		fmt.Fprintf(w, "NOT SENDING — monitoring is switched off for this server in InfraNest%s.\n", since(state.NotActivatedAt, now))
+		fmt.Fprintln(w, "  Nothing is wrong with this agent, this machine or its token. Somebody with")
+		fmt.Fprintln(w, "  access to InfraNest can switch monitoring on for this server under Monitoring,")
+		fmt.Fprintln(w, "  and readings resume on their own within the hour. Do not reinstall the agent.")
 	case state.TokenRejected:
 		// Named first and named plainly, because this is the one failure with a cause nobody guesses:
 		// the machine is fine, the network is fine, and somebody deleted the token in InfraNest — which

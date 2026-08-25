@@ -52,6 +52,19 @@ type Skipped struct {
 // carrying will never be wanted by anyone.
 var ErrTokenRejected = errors.New("the server rejected this token")
 
+// ErrNotActivated means monitoring is switched off for this server in InfraNest.
+//
+// Distinguished from ErrTokenRejected even though both arrive as 403, because the two want opposite
+// things from whoever reads `status`. A rejected token is fixed on this machine — install a new one, or
+// remove the agent. This is fixed in InfraNest, by somebody who may not be the person on this server, and
+// the agent resumes on its own when they do it. Reading it as a bad token means uninstalling and
+// reinstalling an agent that was working perfectly, and finding out afterwards that nothing changed.
+var ErrNotActivated = errors.New("monitoring is not switched on for this server in InfraNest")
+
+// ReasonNotActivated is the machine-readable form of the above, and what is actually branched on. The
+// status code cannot carry the distinction and the message is prose that may be reworded.
+const ReasonNotActivated = "monitoring_not_activated"
+
 // ErrServerRefused means the server understood the request and stored none of it — the spool must be
 // kept, because these readings have not been delivered.
 var ErrServerRefused = errors.New("the server accepted no readings from this push")
@@ -117,6 +130,7 @@ func (c *Client) Send(ctx context.Context, url string, samples []json.RawMessage
 		Skipped    []Skipped `json:"skipped"`
 		ServerTime time.Time `json:"server_time"`
 		IngestURL  string    `json:"ingest_url"`
+		Reason     string    `json:"reason"`
 	}
 	// A body we cannot parse is not fatal on its own — the status code is the real answer, and a proxy
 	// serving an HTML error page should not look different from the 502 it is.
@@ -134,6 +148,10 @@ func (c *Client) Send(ctx context.Context, url string, samples []json.RawMessage
 	}
 
 	switch {
+	case decoded.Reason == ReasonNotActivated:
+		// Checked before the status code, not after it: this arrives as a 403 and would otherwise be
+		// read as a dead credential.
+		return result, fmt.Errorf("%w: %s", ErrNotActivated, firstLine(decoded.Message))
 	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden:
 		return result, fmt.Errorf("%w: %s", ErrTokenRejected, firstLine(decoded.Message))
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
