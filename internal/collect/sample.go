@@ -28,6 +28,11 @@ type Sample struct {
 	Mounts    []Mount   `json:"mounts,omitempty"`
 	Processes []Process `json:"processes,omitempty"`
 
+	// What the machine says about itself: kernel, OS, pending updates, reboot required (#767). Changes
+	// rarely, so it rides on every sample rather than having a cadence of its own — it is four short
+	// strings and two integers, which is cheaper than the bookkeeping a schedule would need.
+	System *System `json:"system,omitempty"`
+
 	AgentVersion string `json:"agent_version,omitempty"`
 
 	// Collectors that failed, by name, with the reason. Reported rather than hidden: a collector that

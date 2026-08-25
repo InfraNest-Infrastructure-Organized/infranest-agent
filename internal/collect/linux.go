@@ -32,6 +32,12 @@ type Options struct {
 func Collect(opts Options) (Sample, error) {
 	s := Sample{CollectedAt: time.Now().UTC()}
 
+	// Independent of everything else, like every collector here: an unreadable /etc/os-release costs the
+	// OS name and nothing more.
+	if sys := CollectSystem(); sys != (System{}) {
+		s.System = &sys
+	}
+
 	if pct, err := collectCPU(opts.CPUInterval); err != nil {
 		s.fail("cpu", err)
 	} else {
