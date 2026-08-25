@@ -230,8 +230,8 @@ func statMount(e mountEntry) (Mount, bool) {
 	avail := int64(st.Bavail) * blockSize
 
 	return Mount{
-		MountPoint: e.point,
-		Device:     e.device,
+		MountPoint: clip(e.point, maxMountPoint),
+		Device:     clip(e.device, maxDevice),
 		TotalBytes: total,
 		UsedBytes:  total - avail,
 	}, true
@@ -266,7 +266,7 @@ func readProcesses(opts Options) ([]Process, error) {
 			continue
 		}
 
-		p := Process{Command: comm, PID: pid}
+		p := Process{Command: clip(comm, maxCommand), PID: pid}
 
 		if rss, err := readRSS(pid, pageSize); err == nil {
 			p.MemoryBytes = i64(rss)
@@ -275,7 +275,11 @@ func readProcesses(opts Options) ([]Process, error) {
 		if opts.ProcessArgs {
 			if args, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid)); err == nil {
 				if full := strings.TrimSpace(strings.ReplaceAll(string(args), "\x00", " ")); full != "" {
-					p.Command = full
+					// Clipped here, not left for the server to reject. A command line over the limit
+					// fails validation for the entire push, which carries no per-reading verdict — so
+					// the batch never settles, stays at the head of the spool and is retried for ever,
+					// with everything behind it. See limits.go.
+					p.Command = clip(full, maxCommand)
 				}
 			}
 		}

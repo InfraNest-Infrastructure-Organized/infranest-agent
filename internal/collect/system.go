@@ -40,11 +40,11 @@ func CollectSystem() System {
 	var s System
 
 	if v, err := os.ReadFile("/proc/sys/kernel/osrelease"); err == nil {
-		s.Kernel = strings.TrimSpace(string(v))
+		s.Kernel = clip(strings.TrimSpace(string(v)), maxSystemField)
 	}
 
 	if f, err := os.Open("/etc/os-release"); err == nil {
-		s.OS = parseOSRelease(f)
+		s.OS = clip(parseOSRelease(f), maxSystemField)
 		_ = f.Close()
 	}
 

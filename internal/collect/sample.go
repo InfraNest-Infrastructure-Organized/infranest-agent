@@ -85,7 +85,10 @@ func (s *Sample) fail(collector string, err error) {
 	if s.Failed == nil {
 		s.Failed = map[string]string{}
 	}
-	s.Failed[collector] = err.Error()
+	// An error string is whatever the failing call produced — a D-Bus refusal quotes the bus, and a file
+	// error carries a path. Neither has a bound, and an over-long one would fail validation for the whole
+	// push: the collector-failure field would take the reading down with it, which is precisely backwards.
+	s.Failed[collector] = clip(err.Error(), maxFailReason)
 }
 
 func f64(v float64) *float64 { return &v }

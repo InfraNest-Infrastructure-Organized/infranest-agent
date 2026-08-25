@@ -184,7 +184,13 @@ func bucketFor(path string, rootDepth int) string {
 func topDirs(totals map[string]int64, n int) []DirUsage {
 	dirs := make([]DirUsage, 0, len(totals))
 	for path, bytes := range totals {
-		dirs = append(dirs, DirUsage{Path: path, Bytes: bytes, Kind: kindFor(path)})
+		// A directory path is arbitrary bytes chosen by whoever created it, and nesting has no bound.
+		// Clipped to what the ingest accepts rather than left to fail validation for the whole push.
+		dirs = append(dirs, DirUsage{
+			Path:  clip(path, maxUsagePath),
+			Bytes: bytes,
+			Kind:  clip(kindFor(path), maxUsageKind),
+		})
 	}
 
 	sort.Slice(dirs, func(i, j int) bool {

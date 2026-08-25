@@ -64,11 +64,14 @@ func CollectServices() ([]Service, error) {
 			}
 		}
 
+		// Clipped to what the ingest accepts. A unit description is free text from a unit file and has
+		// no length systemd enforces, so this is the field most likely to exceed it — and an over-long
+		// one would fail validation for the whole push rather than for itself. See limits.go.
 		service := Service{
-			Unit:        unit.Name,
-			Description: unit.Description,
-			ActiveState: unit.ActiveState,
-			SubState:    unit.SubState,
+			Unit:        clip(unit.Name, maxUnit),
+			Description: clip(unit.Description, maxDescription),
+			ActiveState: clip(unit.ActiveState, maxState),
+			SubState:    clip(unit.SubState, maxState),
 		}
 
 		if failed && unit.Path != "" {
