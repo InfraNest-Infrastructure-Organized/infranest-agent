@@ -6,16 +6,17 @@ This is a **public contract**. The agent is one implementation of it; anyone may
 endpoint does not care which is talking to it. So this document is the specification rather than a
 description of our code, and where the two disagree the endpoint's validation is the authority.
 
-**Contract version 2** — current as of agent `v0.5.0`.
+**Contract version 3** — current as of agent `v0.6.0`.
 
 Every change so far has been *additive*, and that is the rule rather than a run of luck: a field is added,
 never repurposed, and never made required after the fact. A sender written against version 1 keeps working
-against a version 2 endpoint, and a version 2 sender talking to an older endpoint has its unknown fields
-ignored. If that ever has to break, this document gets a version 3 section and both are served for as long
-as anyone is running the old one.
+against a version 3 endpoint, and a newer sender talking to an older endpoint has its unknown fields
+ignored. If that ever has to break, this document gets a section for each shape and both are served for as
+long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
+| 3 | `services[].restarts`, `services[].memory_bytes`, and `state_changed_at` on every unit rather than only the failed ones |
 | 2 | `disk_usage.accounted_bytes`, `disk_usage.unreadable[]`, `disk_usage.more_unreadable`, the `too_frequent` skip reason, `min_interval_seconds` in the response, and the 8 MB body limit stated with the rule that snapshots ride the newest sample only |
 | 1 | The batch envelope, samples, mounts, processes, services, system facts, `disk_usage` |
 
@@ -80,7 +81,9 @@ nothing rather than a guess.
 | `services[].description` | string ≤255 | |
 | `services[].active_state` | string ≤32 | systemd's own vocabulary — `active`, `inactive`, `failed`, `activating`, `deactivating` — sent verbatim rather than mapped. What "exited" means for a oneshot is a judgement the page makes with the whole picture |
 | `services[].sub_state` | string ≤32 | |
-| `services[].state_changed_at` | RFC3339 | When the unit entered its current state. This is what "failed 2 days ago" is read from |
+| `services[].state_changed_at` | RFC3339 | When the unit entered its current state. This is what "failed 2 days ago" is read from, and what makes "changed in the last day" answerable — so it is sent for **every** unit, not only the failed ones |
+| `services[].restarts` | int ≥0 | How many times the service manager has restarted this unit. Absent for units that cannot have it — a timer is not a service — rather than zero, because "never restarted" and "cannot restart" are different facts. A unit in a crash-restart loop reads as `active` every time anyone looks; this is the only field here that makes it visible |
+| `services[].memory_bytes` | int ≥0 | What this unit's cgroup is using. Per *unit*, not per process: a service that forks twenty workers is twenty rows in `processes[]` and one number here. **Absent where the platform reports it as unknown** — systemd answers `(uint64) -1` for a unit with no memory accounting, and a sender that passes that through reports sixteen exabytes |
 | `system.kernel` / `system.os` | string ≤128 | |
 | `system.pending_updates` / `security_updates` | int | Absent means "could not tell", which is not zero |
 | `system.reboot_required` | bool | |

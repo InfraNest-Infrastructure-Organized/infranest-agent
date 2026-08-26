@@ -68,6 +68,21 @@ type Service struct {
 	// systemd's record of when the unit entered its current state. Only fetched for units that have
 	// failed — it is one call each, and on a healthy machine there are none.
 	StateChangedAt *time.Time `json:"state_changed_at,omitempty"`
+
+	// How many times systemd has restarted this unit since it was loaded (#774).
+	//
+	// The one thing systemd knows that nothing else here surfaces. A unit in a crash-restart loop reads as
+	// `active` every time anyone looks: the page says it is running, no alert fires, and the only symptom
+	// is whatever the restarts are costing. Absent for units that cannot have it — a timer is not a
+	// service — rather than zero, because "never restarted" and "cannot restart" are different facts.
+	Restarts *uint64 `json:"restarts,omitempty"`
+
+	// What this unit's cgroup is using, in bytes.
+	//
+	// Per *unit*, which is what makes it worth carrying next to the process list: a service that forks
+	// twenty workers is twenty rows there and one number here. Absent where systemd has no accounting for
+	// the unit — see dbus.MemoryUnknown, which is `(uint64) -1` and reads as sixteen exabytes if believed.
+	MemoryBytes *uint64 `json:"memory_bytes,omitempty"`
 }
 
 // Process is one of the busiest few. Command carries no arguments unless the operator turned them on:

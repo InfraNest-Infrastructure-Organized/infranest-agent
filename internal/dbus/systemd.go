@@ -22,6 +22,7 @@ const (
 	managerPath        = "/org/freedesktop/systemd1"
 	managerInterface   = "org.freedesktop.systemd1.Manager"
 	unitInterface      = "org.freedesktop.systemd1.Unit"
+	serviceInterface   = "org.freedesktop.systemd1.Service"
 	propertiesGet      = "org.freedesktop.DBus.Properties"
 )
 
@@ -121,6 +122,64 @@ func (c *Conn) UnitFileState(name string) (string, error) {
 	state := d.str()
 
 	return state, d.err
+}
+
+// MemoryUnknown is what systemd answers for a unit with no memory accounting.
+//
+// `(uint64) -1`, not zero. A unit whose cgroup is not accounted returns the maximum value, and a caller
+// that takes it at face value reports sixteen exabytes of memory use — which is the kind of number that
+// gets believed for exactly as long as it takes somebody to act on it.
+const MemoryUnknown = ^uint64(0)
+
+// unitPropertyUint64 reads one numeric property off a unit, in either of the two widths systemd uses.
+//
+// `NRestarts` is a `u` and `MemoryCurrent` is a `t`; both arrive inside a variant, so the caller cannot
+// know which until the inner signature is read. Returning one width keeps the call sites from caring.
+func (c *Conn) unitPropertyUint64(unitPath, iface, name string) (uint64, error) {
+	body, signature, err := c.Call(managerDestination, unitPath, propertiesGet, "Get", "ss", iface, name)
+	if err != nil {
+		return 0, err
+	}
+	if signature != "v" {
+		return 0, fmt.Errorf("Properties.Get answered %q, expected \"v\"", signature)
+	}
+
+	d := &decoder{buf: body}
+
+	switch inner := d.signature(); inner {
+	case "t":
+		value := d.uint64()
+
+		return value, d.err
+	case "u":
+		value := d.uint32()
+
+		return uint64(value), d.err
+	default:
+		return 0, fmt.Errorf("%s is %q, expected a number", name, inner)
+	}
+}
+
+// Restarts is how many times systemd has restarted this unit since it was loaded.
+//
+// The single most useful thing systemd knows that nothing else here surfaces. A unit in a crash-restart
+// loop is `active` every time anyone looks at it — the page says it is running, the alert never fires, and
+// the only visible symptom is whatever the restarts are costing. This is the counter that makes it
+// visible.
+//
+// Only `.service` units have it. Asking a timer or a target answers with an unknown-property error, which
+// is why the caller filters rather than treating the error as a failure.
+func (c *Conn) Restarts(unitPath string) (uint64, error) {
+	return c.unitPropertyUint64(unitPath, serviceInterface, "NRestarts")
+}
+
+// MemoryCurrent is what this unit's cgroup is currently using, in bytes.
+//
+// Per *unit* rather than per process, which is the difference that makes it worth having: a service that
+// forks twenty workers shows as twenty rows in a process list and as one number here. Returns
+// {@link MemoryUnknown} where accounting is off, which the caller must treat as absent.
+func (c *Conn) MemoryCurrent(unitPath string) (uint64, error) {
+	return c.unitPropertyUint64(unitPath, serviceInterface, "MemoryCurrent")
 }
 
 // StateChangedAt is when the unit entered the state it is in now.
