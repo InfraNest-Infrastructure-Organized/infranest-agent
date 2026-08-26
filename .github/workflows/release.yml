@@ -1,0 +1,156 @@
+name: Release
+
+# A tag is the only trigger. Releases are cut deliberately, from a commit somebody chose — not on every
+# push to a branch, which would make "which build is running on that server" a question with a moving
+# answer.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  # What keyless signing needs, and the reason it needs no key: `id-token` lets this job prove to
+  # Sigstore that it is this workflow in this repository, and a short-lived certificate is issued
+  # against that. There is nothing stored to leak, and nothing for a repository compromise to steal that
+  # it did not already have.
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    name: Build, verify reproducible, publish
+    runs-on: ubuntu-latest
+    steps:
+      # Actions pinned by digest, not by tag — the same as ci.yml, and it matters more here. This job
+      # produces the binaries customers install as a system service; a moved tag on a third-party action
+      # would inject straight into them, which is the supply-chain shape #782 exists to prevent. A
+      # floating tag in a release pipeline is the one place it is least defensible.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The build stamps the commit, and a shallow clone cannot describe one.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # From go.mod, never a literal. Pinned to '1.23' this job would have failed on the first tag —
+          # go.mod says 1.24 — and a release pipeline that cannot run is discovered at the worst moment.
+          go-version-file: go.mod
+          check-latest: true
+
+      # Everything downstream reads these, so they are computed once. SOURCE_DATE_EPOCH comes from the
+      # *commit*, never from `now`: a build stamped with the wall clock is a build that cannot be
+      # reproduced, which would quietly cost the property this whole job exists to provide.
+      - name: Establish what is being built
+        id: what
+        run: |
+          echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "commit=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "epoch=$(git log -1 --pretty=%ct)" >> "$GITHUB_OUTPUT"
+          echo "date=$(git log -1 --date=format:%Y-%m-%d --pretty=%cd)" >> "$GITHUB_OUTPUT"
+
+      # The same invariants CI enforces on every push, re-run here rather than trusted.
+      #
+      # A release is built from a tag, and a tag can point at a commit that never went through the branch
+      # checks — moved deliberately, or pushed straight to a tag. The whole promise of the release is that
+      # what it contains is what the source says, so the checks that define "what the source says" run
+      # against the exact bytes being shipped.
+      - name: The agent still only sends
+        run: |
+          fail=0
+          for os in linux windows darwin freebsd; do
+            deps=$(GOOS=$os go list -deps ./cmd/infranest-agent)
+            for pkg in os/exec net/rpc net/http/cgi net/http/fcgi; do
+              echo "$deps" | grep -qx "$pkg" && { echo "::error::$pkg is in the $os graph"; fail=1; }
+            done
+          done
+          if [ -s go.sum ]; then echo "::error::go.sum is not empty"; fail=1; fi
+          if grep -rnE '"(StartUnit|StopUnit|RestartUnit|ReloadUnit|KillUnit|TryRestartUnit|ReloadOrRestartUnit|EnableUnitFiles|DisableUnitFiles|MaskUnitFiles|SetUnitProperties|Reexecute)"' --include='*.go' . ; then
+            echo "::error::a unit-control method name is in the source"; fail=1
+          fi
+          exit $fail
+
+      - name: Test
+        run: go test ./...
+
+      # `-trimpath` removes the build machine's directory layout from the binary, and CGO_ENABLED=0 means
+      # no libc is linked in. Together with a fixed SOURCE_DATE_EPOCH they are what make the output a
+      # function of the source alone — which is the difference between "trust our release" and "check it
+      # yourself".
+      - name: Build every target
+        env:
+          CGO_ENABLED: "0"
+          SOURCE_DATE_EPOCH: ${{ steps.what.outputs.epoch }}
+        run: |
+          mkdir -p dist
+          ldflags="-s -w \
+            -X main.version=${{ steps.what.outputs.version }} \
+            -X main.commit=${{ steps.what.outputs.commit }} \
+            -X main.date=${{ steps.what.outputs.date }}"
+
+          for target in \
+            linux/amd64 linux/arm64 linux/arm linux/386 linux/riscv64 linux/ppc64le linux/s390x \
+            windows/amd64 windows/arm64 \
+            darwin/amd64 darwin/arm64 freebsd/amd64; do
+            os=${target%/*}; arch=${target#*/}
+            out="dist/infranest-agent_${os}_${arch}"
+            [ "$os" = "windows" ] && out="${out}.exe"
+            GOOS=$os GOARCH=$arch go build -trimpath -ldflags "$ldflags" -o "$out" ./cmd/infranest-agent
+            echo "  built $out"
+          done
+
+      # Built twice, compared. A reproducibility claim nobody tests is a reproducibility claim that is
+      # false the first time a build input sneaks in — and the failure is silent, because a
+      # non-reproducible binary works perfectly. It just cannot be verified by anyone.
+      - name: Prove the build is reproducible
+        env:
+          CGO_ENABLED: "0"
+          SOURCE_DATE_EPOCH: ${{ steps.what.outputs.epoch }}
+        run: |
+          ldflags="-s -w \
+            -X main.version=${{ steps.what.outputs.version }} \
+            -X main.commit=${{ steps.what.outputs.commit }} \
+            -X main.date=${{ steps.what.outputs.date }}"
+
+          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$ldflags" -o /tmp/again ./cmd/infranest-agent
+          if ! cmp -s /tmp/again dist/infranest-agent_linux_amd64; then
+            echo "::error::two builds of the same commit differ — the build is not reproducible"
+            exit 1
+          fi
+          echo "  identical on a second build"
+
+      # One file per artifact, because that is what install.sh fetches, plus a single manifest for anyone
+      # verifying the set. The manifest is also what a signature will cover when #782's key decision is
+      # made — signing one file rather than twelve.
+      - name: Checksums
+        working-directory: dist
+        run: |
+          for f in infranest-agent_*; do
+            case "$f" in *.sha256|SHA256SUMS) continue ;; esac
+            sha256sum "$f" > "$f.sha256"
+          done
+          sha256sum infranest-agent_* > SHA256SUMS
+          cat SHA256SUMS
+
+      # Keyless: no private key exists, here or anywhere. The attestation records which commit, which
+      # workflow and which runner produced these exact bytes, and lands in a public transparency log —
+      # so a forged release is attributable rather than deniable, which is the property an offline key
+      # held by one person cannot offer once that person is asleep.
+      #
+      # Chosen over `cosign` directly because customers verify with `gh attestation verify`, and asking
+      # somebody to install a large third-party binary to check a zero-dependency agent is an odd shape.
+      #
+      # It proves *who built this*. It does not prove the source is good — the reproducible build above
+      # is what answers that, and it needs no third party at all. The release notes say so in that order.
+      - name: Attest what was built
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: 'dist/infranest-agent_*'
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.what.outputs.version }}
+        run: |
+          sed "s/__TAG__/${TAG}/g" .github/release-notes.md > /tmp/notes.md
+          gh release create "$TAG" dist/* --title "$TAG" --notes-file /tmp/notes.md

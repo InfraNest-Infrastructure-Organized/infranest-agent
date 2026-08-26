@@ -2,14 +2,27 @@
 // InfraNest account.
 //
 // It only ever sends. It takes no instructions, executes nothing, and opens no ports: the HTTP response is
-// ignored beyond its status code, there is no listening socket, and nothing here runs a subprocess. CI
+// read only to be reported on, there is no listening socket, and nothing here runs a subprocess. CI
 // checks the first two by inspecting the dependency graph rather than trusting this comment.
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/agent"
+	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/collect"
+	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/config"
+	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/push"
+	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/spool"
 )
 
 // Set by the build. Reported by --version and sent with each push, so a fleet running a version with a
@@ -32,10 +45,34 @@ func main() {
 func run(args []string, stdout, stderr *os.File) error {
 	fs := flag.NewFlagSet("infranest-agent", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	fs.Usage = func() { usage(stdout) }
 	showVersion := fs.Bool("version", false, "print version information and exit")
+	withProcesses := fs.Bool("processes", false, "include the top processes by memory")
+	withArgs := fs.Bool("process-args", false, "include full command lines — these often contain credentials")
+	// Explicit, so neither `run` nor `status` depends on a service manager having set an environment
+	// variable. A Windows scheduled task inherits nothing, and the Linux unit's EnvironmentFile is one
+	// override away from pointing somewhere else.
+	configPath := fs.String("config", "", "path to the agent configuration file")
 
-	if err := fs.Parse(args); err != nil {
+	// Go's flag package stops parsing at the first non-flag argument, so `print --processes` would leave
+	// the flag unparsed and silently false — the command would succeed, print no processes, and give
+	// nobody a reason why. Pulling the subcommand out first means flags work on either side of it, which
+	// is what anyone typing it will expect.
+	command, rest := splitCommand(args)
+
+	if err := fs.Parse(rest); err != nil {
+		// `--help` is someone asking a question, not getting something wrong: answer it on stdout and
+		// exit 0. flag.ErrHelp arrives here after fs.Usage has already printed.
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
+	}
+
+	// A second positional means a typo or a misunderstanding, and dropping it silently is how
+	// `print --processes` came to do nothing. Saying so costs a line.
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected argument %q — only one command at a time", fs.Arg(0))
 	}
 
 	if *showVersion {
@@ -43,13 +80,132 @@ func run(args []string, stdout, stderr *os.File) error {
 		return nil
 	}
 
-	switch fs.Arg(0) {
+	switch command {
 	case "", "help":
 		usage(stdout)
 		return nil
+	case "print":
+		return printSample(stdout, collect.Options{
+			Processes:    *withProcesses || *withArgs,
+			ProcessArgs:  *withArgs,
+			MaxProcesses: 10,
+			CPUInterval:  300 * time.Millisecond,
+			// `print` shows what would be sent, so it shows this too — it is the fastest way for somebody
+			// to see which units the agent considers watched on their own machine.
+			Services: true,
+		})
+	case "run":
+		return runAgent(stdout, stderr, environment(*configPath))
+	case "status":
+		return showStatus(stdout, environment(*configPath))
+	case "flare", "uninstall":
+		// Recognised, so the error says what is actually true rather than "unknown command", which would
+		// send someone hunting for a typo that is not there.
+		return fmt.Errorf("%q is not implemented yet", command)
 	default:
-		return fmt.Errorf("unknown command %q — run without arguments for usage", fs.Arg(0))
+		return fmt.Errorf("unknown command %q — run without arguments for usage", command)
 	}
+}
+
+// splitCommand pulls the first non-flag argument out, returning it and everything else.
+//
+// This is what lets flags appear on either side of the subcommand. The alternative — telling people to
+// write `--processes print` — is a rule nobody will remember and nothing enforces.
+func splitCommand(args []string) (command string, rest []string) {
+	rest = make([]string, 0, len(args))
+
+	for _, arg := range args {
+		if command == "" && arg != "" && !strings.HasPrefix(arg, "-") {
+			command = arg
+			continue
+		}
+		rest = append(rest, arg)
+	}
+
+	return command, rest
+}
+
+// printSample runs one collection cycle and writes what would be posted, sending nothing.
+//
+// This is the first thing the README documents, and deliberately so: it is a better answer to "what does
+// this collect?" than any prose, because it is the reader's own machine answering with their own data.
+// That means the output has to be exactly the payload — not a summary of it, and not a prettier version.
+func printSample(w *os.File, opts collect.Options) error {
+	sample, err := collect.Collect(opts)
+	if err != nil {
+		return err
+	}
+	sample.AgentVersion = version
+
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+
+	return enc.Encode(sample)
+}
+
+// runAgent collects and sends until it is told to stop.
+//
+// Everything it needs comes from the environment, which systemd fills from /etc/infranest/agent.conf and
+// Windows from the scheduled task. Configuration errors are fatal *here* rather than warned about and
+// carried on with: an agent that starts, reports healthy to the service manager, and sends nowhere is
+// indistinguishable — from the only place anyone is looking — from a server that has gone down.
+func runAgent(stdout, stderr *os.File, getenv func(string) string) error {
+	cfg, err := config.Load(getenv)
+	if err != nil {
+		return err
+	}
+
+	sp, err := spool.New(cfg.StateDir + "/spool")
+	if err != nil {
+		return err
+	}
+
+	// SIGTERM is how systemd stops a service and how a container is asked to exit. Handling it means the
+	// reading in flight finishes and the state file is written, instead of the process being killed
+	// mid-write and `status` reporting nonsense on the next start.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	fmt.Fprintf(stdout, "infranest-agent %s: sending to %s every %s\n", version, cfg.PushURL(), cfg.Interval)
+
+	runner := &agent.Runner{
+		Config: cfg,
+		Sender: push.New(cfg.Token, version),
+		Spool:  sp,
+		Log:    stderr,
+	}
+
+	return runner.Run(ctx)
+}
+
+// environment is the process environment, with --config answering for INFRANEST_CONFIG when given.
+//
+// The flag wins over the variable: somebody typing a path on the command line is being more specific than
+// whatever a service manager did or did not set.
+func environment(configPath string) func(string) string {
+	if configPath == "" {
+		return os.Getenv
+	}
+
+	return func(key string) string {
+		if key == "INFRANEST_CONFIG" {
+			return configPath
+		}
+
+		return os.Getenv(key)
+	}
+}
+
+// showStatus answers "is this working?" from what is on this machine, reaching nothing.
+func showStatus(stdout *os.File, getenv func(string) string) error {
+	cfg, err := config.Load(getenv)
+	if err != nil {
+		return err
+	}
+
+	agent.Status(stdout, cfg, time.Now())
+
+	return nil
 }
 
 func usage(w *os.File) {
@@ -62,13 +218,28 @@ Usage:
 
 Commands:
   print       run one collection cycle and write what would be sent to stdout, sending nothing
-  status      what is collecting, and when the last push succeeded
-  flare       a redacted bundle for a support ticket
-  uninstall   remove the unit, user, binary, config and state
+  run         collect continuously and send — this is what the service runs
+  status      whether readings are being delivered, and if not, why not
+  flare       a redacted bundle for a support ticket              (not implemented yet)
+  uninstall   remove the unit, user, binary, config and state     (not implemented yet)
 
 Flags:
-  --version   print version information and exit
+  --version        print version information and exit
+  --processes      include the top processes by memory
+  --process-args   include full command lines (Linux only) — these often contain
+                   credentials, which is why the executable name alone is the default
+  --config <path>  read settings from this file instead of the installed one
 
-Not implemented yet — this is the scaffold. See the README for what is coming.
+Configuration (from the environment; systemd reads /etc/infranest/agent.conf):
+  INFRANEST_TOKEN        the server token             (required)
+  INFRANEST_URL          where to send                (default https://ingest.infranest.app)
+  INFRANEST_INTERVAL     how often to collect         (default 60s, between 10s and 5m)
+  INFRANEST_STATE_DIR    spool and state              (default /var/lib/infranest-agent)
+  INFRANEST_PROCESSES    collect the busiest processes
+  INFRANEST_PROCESS_ARGS include command lines — these often contain credentials
+  INFRANEST_SERVICES     watch systemd units and report the failed ones (default on)
+
+A reading that cannot be delivered is kept on disk and sent when the connection comes
+back, so a network problem costs nothing but the delay.
 `)
 }

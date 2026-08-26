@@ -33,7 +33,34 @@ jobs:
 
       - run: go vet ./...
       - run: go test -race ./...
-      - run: go build ./cmd/infranest-agent
+
+      # Every target, every commit. Most of this agent is platform-specific by construction, so a
+      # Linux-only build would let a Windows or ARM break sit undiscovered until someone tried to install
+      # it — and the person who discovers it that way is a customer.
+      #
+      # CGO_ENABLED=0 is the portability guarantee, not an optimisation: it produces a static binary with
+      # no libc, so one Linux build runs on glibc and musl alike. Without it, an Alpine host needs a
+      # different artefact.
+      - name: Build every target
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          for target in \
+            linux/amd64 linux/arm64 linux/arm linux/386 linux/riscv64 linux/ppc64le linux/s390x \
+            windows/amd64 windows/arm64 \
+            darwin/amd64 darwin/arm64 freebsd/amd64; do
+            os=${target%/*}; arch=${target#*/}
+            GOOS=$os GOARCH=$arch go build -o /dev/null ./... || { echo "::error::build failed for $target"; exit 1; }
+            echo "  ok  $target"
+          done
+
+      # `go vet` only inspects the platform it runs on, so the Windows syscall code would otherwise never
+      # be examined at all.
+      - name: Vet the other platforms
+        run: |
+          for os in windows darwin freebsd; do
+            GOOS=$os go vet ./... || { echo "::error::vet failed for $os"; exit 1; }
+          done
 
   invariant:
     name: It only sends
@@ -51,15 +78,20 @@ jobs:
       #
       # This is a build-graph check rather than a grep: an indirect import through a helper package would
       # slip past a grep of our own source, and that is exactly how an invariant erodes.
+      # Per platform, not just the host's. `go list -deps` resolves build tags for one GOOS, so a check
+      # that runs only on Linux never looks at the //go:build windows file at all — `os/exec` could sit in
+      # it and this job would still be green. The guarantee is per-binary, so the check has to be too.
       - name: The agent cannot execute anything, or listen
         run: |
-          deps=$(go list -deps ./cmd/infranest-agent)
           fail=0
-          for pkg in os/exec net/rpc net/http/cgi net/http/fcgi; do
-            if echo "$deps" | grep -qx "$pkg"; then
-              echo "::error::$pkg is in the agent's dependency graph. The agent only sends: it runs nothing and serves nothing."
-              fail=1
-            fi
+          for os in linux windows darwin freebsd; do
+            deps=$(GOOS=$os go list -deps ./cmd/infranest-agent)
+            for pkg in os/exec net/rpc net/http/cgi net/http/fcgi; do
+              if echo "$deps" | grep -qx "$pkg"; then
+                echo "::error::$pkg is in the $os dependency graph. The agent only sends: it runs nothing and serves nothing."
+                fail=1
+              fi
+            done
           done
           exit $fail
 
@@ -73,6 +105,19 @@ jobs:
             exit 1
           fi
 
+      # The agent reads systemd's state and cannot change it (#774). The operating system already refuses
+      # — unit control is gated behind polkit and this service has no session to authenticate with — so
+      # this check is not the security boundary. It is here for the same reason the os/exec one is: to
+      # keep a deliberate restraint from eroding one convenient-looking commit at a time, and to make the
+      # claim in the README something a reader can verify rather than take on trust.
+      - name: The agent can read systemd, and cannot command it
+        run: |
+          if grep -rnE '"(StartUnit|StopUnit|RestartUnit|ReloadUnit|KillUnit|TryRestartUnit|ReloadOrRestartUnit|EnableUnitFiles|DisableUnitFiles|MaskUnitFiles|SetUnitProperties|Reexecute)"' \
+               --include='*.go' . ; then
+            echo "::error::A unit-control method name is in the source. The agent only reads systemd's state."
+            exit 1
+          fi
+
       # Dependencies are the other supply chain. There should be none.
       - name: No third-party dependencies
         run: |
@@ -80,10 +125,20 @@ jobs:
             echo "::error::go.sum is not empty — a third-party dependency was added. See CONTRIBUTING.md."
             exit 1
           fi
-          # Standard-library import paths are lowercase letters, digits and slashes, and contain no dot.
-          # A dot is what makes a path a domain, so "has no dot" is the property that actually separates
-          # the standard library from everything else — `unicode/utf8` has a digit, `vendor/...` does not.
-          if go list -deps ./... | grep -vE '^(github\.com/InfraNest-Infrastructure-Organized/infranest-agent(/.*)?$)' | grep -E '\.' ; then
-            echo "::error::A package outside the standard library is in the graph. See CONTRIBUTING.md."
-            exit 1
-          fi
+          # Go's own answer, not a guess at one. `.Standard` is the toolchain's field for "this is the
+          # standard library", so this cannot disagree with the compiler about what counts.
+          #
+          # It used to be `grep -E '\.'` — a dot makes a path a domain, so "has no dot" looked like it
+          # separated the standard library from everything else. It does not: the standard library
+          # vendors parts of golang.org/x into itself, so `vendor/golang.org/x/net/http2/hpack` is
+          # stdlib with a dot in its name. That never came up while the agent imported nothing that
+          # reached crypto/tls, and the first HTTPS client turned this job red for a dependency nobody
+          # had added. A gate that fails on correct code gets switched off, which is the real cost.
+          for os in linux windows darwin freebsd; do
+            outside=$(GOOS=$os go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./... \
+              | grep -vE '^github\.com/InfraNest-Infrastructure-Organized/infranest-agent(/.*)?$' || true)
+            if [ -n "$outside" ]; then
+              echo "::error::A package outside the standard library is in the $os graph: $outside. See CONTRIBUTING.md."
+              exit 1
+            fi
+          done
