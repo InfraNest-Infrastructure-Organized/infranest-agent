@@ -238,8 +238,9 @@ The agent does not pretend otherwise, and does not ask for root to fix it:
   privilege. The difference is shown as **not accounted for** — so a breakdown covering a quarter of the
   disk says so, instead of presenting that quarter as the whole picture.
 
-If you want the contents counted, grant the agent's user read access to that directory. Nothing here needs
-it to run as root.
+If you want the contents counted, grant the agent's user read and execute access to that directory — bear
+in mind that Docker protects the directories *inside* `/var/lib/docker` as well, so the top one alone is
+usually not enough. Nothing here needs the agent to run as root, and nothing here ever will.
 
 ```
 User=infranest-agent
