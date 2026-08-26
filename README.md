@@ -268,6 +268,22 @@ The token lives in `/etc/infranest/agent.conf`, mode 0600, loaded with `Environm
 lives in `%ProgramData%\InfraNest\agent.conf`, readable only by Administrators, SYSTEM and the account
 the task runs as; the agent reads it directly there, because a scheduled task inherits no environment.
 
+### How often it reports
+
+Every 60 seconds by default, configurable with `INFRANEST_INTERVAL` between 10 seconds and 5 minutes.
+
+Your InfraNest plan also decides how often readings are **stored**, and the agent is told that number on
+every push. When the plan's figure is slower than the configured interval the agent adopts it — sampling
+faster than the far end keeps is work thrown away.
+
+It is only ever adopted **downward**. A response can ask the agent to send less often, never more, for the
+same reason a response cannot redirect it to an arbitrary host: anyone able to answer one push would
+otherwise be able to make every agent busier.
+
+Nothing is lost when readings do arrive too fast. The server keeps one per interval, reports the rest as
+`too_frequent`, and answers `200` — they are settled, so they leave the spool instead of being retried for
+ever.
+
 ## A network problem costs nothing
 
 Readings are collected on a fixed cadence and delivered separately. If a delivery fails — the network is

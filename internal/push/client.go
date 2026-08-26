@@ -25,6 +25,15 @@ type Result struct {
 	ServerTime time.Time
 	IngestURL  string
 
+	// MinInterval is how often the server will *store* a reading, from the plan (#886). Zero when it did
+	// not say, which is every older server and every plan without a floor.
+	//
+	// Honouring it saves the request, not just the write. The server already drops readings that arrive
+	// faster than this and reports them as `too_frequent` — so an agent that ignores it is not wrong, only
+	// wasteful: it pays for a push whose contents are thrown away. Sampling faster than the server stores
+	// is the same waste one step earlier.
+	MinInterval time.Duration
+
 	// Settled means the server gave a per-reading verdict on this batch — some stored, some refused for
 	// a reason that will not change. Those readings are done with either way and must leave the spool.
 	//
@@ -125,12 +134,13 @@ func (c *Client) Send(ctx context.Context, url string, samples []json.RawMessage
 	}
 
 	var decoded struct {
-		Message    string    `json:"message"`
-		Accepted   int       `json:"accepted"`
-		Skipped    []Skipped `json:"skipped"`
-		ServerTime time.Time `json:"server_time"`
-		IngestURL  string    `json:"ingest_url"`
-		Reason     string    `json:"reason"`
+		Message     string    `json:"message"`
+		Accepted    int       `json:"accepted"`
+		Skipped     []Skipped `json:"skipped"`
+		ServerTime  time.Time `json:"server_time"`
+		IngestURL   string    `json:"ingest_url"`
+		MinInterval int       `json:"min_interval_seconds"`
+		Reason      string    `json:"reason"`
 	}
 	// A body we cannot parse is not fatal on its own — the status code is the real answer, and a proxy
 	// serving an HTML error page should not look different from the 502 it is.
@@ -141,6 +151,9 @@ func (c *Client) Send(ctx context.Context, url string, samples []json.RawMessage
 		Skipped:    decoded.Skipped,
 		ServerTime: decoded.ServerTime,
 		IngestURL:  decoded.IngestURL,
+		// Seconds on the wire, a Duration here: the unit belongs in the type rather than in a comment
+		// somebody has to find.
+		MinInterval: time.Duration(decoded.MinInterval) * time.Second,
 		// A verdict on the readings themselves, as opposed to a refusal of the request. Every reason the
 		// server can give — already stored, too old, ahead of its clock — is terminal: none of them comes
 		// good by being sent again, and holding one blocks everything behind it.

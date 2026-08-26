@@ -567,3 +567,25 @@ func TestStatusNamesASpoolItCannotWrite(t *testing.T) {
 		t.Fatalf("status still says to wait for a reading that will never be written:\n%s", got)
 	}
 }
+
+func TestTheServerCanSlowTheAgentDownButNotSpeedItUp(t *testing.T) {
+	// A push response saying "I store one reading every five minutes" is a reason to send less often. The
+	// reverse is not true: an operator who configured two minutes asked for two minutes, and a server able
+	// to *lower* the interval could turn any agent into a busier one by answering a single push — which is
+	// the same shape as the redirect guard on `ingest_url`, and refused for the same reason.
+	r := &Runner{Config: config.Config{Interval: 2 * time.Minute}}
+
+	if got := r.interval(); got != 2*time.Minute {
+		t.Fatalf("with nothing from the server, the configured interval should stand: %s", got)
+	}
+
+	r.serverInterval = 5 * time.Minute
+	if got := r.interval(); got != 5*time.Minute {
+		t.Fatalf("a slower server cadence should win: %s", got)
+	}
+
+	r.serverInterval = 30 * time.Second
+	if got := r.interval(); got != 2*time.Minute {
+		t.Fatalf("a faster server cadence must not win: %s", got)
+	}
+}
