@@ -215,14 +215,68 @@ func TestOnlyTheShallowestRefusalIsNamed(t *testing.T) {
 	}
 }
 
-func TestTheListOfRefusalsIsCapped(t *testing.T) {
+func TestTheListOfRefusalsIsCappedAndTheRestAreCounted(t *testing.T) {
 	scan := UsageScan{}
 	for i := range maxUnreadableDirs * 3 {
 		scan.noteUnreadable(filepath.Join("/x", strconv.Itoa(i)))
 	}
+	scan.rankUnreadable()
 
 	if len(scan.Unreadable) != maxUnreadableDirs {
 		t.Fatalf("the cap did not hold: %d", len(scan.Unreadable))
+	}
+
+	// Counted rather than swallowed: a truncated list that looks complete is how the first production
+	// scan came to present six kilobytes of /etc as the explanation for fourteen gigabytes.
+	if want := maxUnreadableDirs * 2; scan.MoreUnreadable != want {
+		t.Fatalf("dropped refusals were not counted: %d, want %d", scan.MoreUnreadable, want)
+	}
+}
+
+func TestTheRefusalWorthNamingSurvivesTheCap(t *testing.T) {
+	// The bug the first production scan found. Refusals arrive in walk order, which is alphabetical, so on
+	// a stock Ubuntu host /etc/credstore, /etc/multipath, /etc/polkit-1/rules.d, /etc/ssl/private,
+	// /etc/sudoers.d and /lost+found fill the list — a few kilobytes between them — and /var/lib/docker,
+	// the twelve gigabytes the whole feature exists to find, arrives long after it is full.
+	scan := UsageScan{}
+	for _, path := range []string{
+		"/etc/credstore", "/etc/credstore.encrypted", "/etc/multipath", "/etc/polkit-1/rules.d",
+		"/etc/ssl/private", "/etc/sudoers.d", "/lost+found", "/opt/containerd", "/var/lib/docker",
+	} {
+		scan.noteUnreadable(path)
+	}
+	scan.rankUnreadable()
+
+	if scan.Unreadable[0].Path != "/var/lib/docker" {
+		t.Fatalf("the directory worth naming did not come first: %+v", scan.Unreadable)
+	}
+
+	// …and the deepest config fragment is the one that gets dropped, not the data directory.
+	for _, dir := range scan.Unreadable {
+		if dir.Path == "/etc/polkit-1/rules.d" {
+			t.Fatalf("a config fragment outranked something: %+v", scan.Unreadable)
+		}
+	}
+}
+
+func TestTheOrderOfRefusalsIsStableBetweenRuns(t *testing.T) {
+	// A list that reshuffles between refreshes reads as movement that is not there.
+	paths := []string{"/opt/a", "/opt/b", "/var/lib/docker", "/etc/x", "/etc/y"}
+
+	first, second := UsageScan{}, UsageScan{}
+	for _, p := range paths {
+		first.noteUnreadable(p)
+	}
+	for _, p := range paths {
+		second.noteUnreadable(p)
+	}
+	first.rankUnreadable()
+	second.rankUnreadable()
+
+	for i := range first.Unreadable {
+		if first.Unreadable[i].Path != second.Unreadable[i].Path {
+			t.Fatalf("order differed between runs: %+v vs %+v", first.Unreadable, second.Unreadable)
+		}
 	}
 }
 
