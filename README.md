@@ -56,7 +56,7 @@ is the first thing documented rather than a debugging flag buried at the bottom.
 | **Load average** | 1 / 5 / 15 minute |
 | **Uptime** | seconds since boot |
 | **Processes** | the largest few by memory, off by default. Sorted by memory rather than CPU because a CPU share needs two readings per process, which means walking all of `/proc` twice. **Arguments are omitted** — command lines routinely carry credentials, so the executable name is what gets sent unless you ask otherwise |
-| **Services** | systemd units that were set up to run, and which of them have failed. Watched set is "enabled, plus anything currently failed", so it works with no configuration. Read over D-Bus; nothing here can start, stop or restart a unit |
+| **Services** | systemd units that were set up to run, which of them have failed, **how many times each has been restarted**, and what each is using in memory. Watched set is "enabled, plus anything currently failed", so it works with no configuration. Read over D-Bus; nothing here can start, stop or restart a unit |
 
 A failed unit is worth its own line here because it is the failure that moves no number: a backup timer
 that died leaves CPU, memory, disk and load exactly where they were, and the machine looks perfectly

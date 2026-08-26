@@ -74,11 +74,28 @@ func CollectServices() ([]Service, error) {
 			SubState:    clip(unit.SubState, maxState),
 		}
 
-		if failed && unit.Path != "" {
-			// Only for failures, which is what keeps a per-unit property read affordable: this is the
-			// number the page turns into "failed 2 days ago", and on a healthy machine it is never asked.
+		if unit.Path != "" {
+			// For every unit, not only the failures. It used to be failures alone, on the grounds that a
+			// per-unit property read is the expensive part — but that made "what changed recently" a
+			// question the payload could not answer, because every healthy unit arrived with no timestamp
+			// at all. A list of seventy units nobody can sort by *when they last did something* is
+			// inventory; this is what makes it a diagnosis.
 			if at, err := conn.StateChangedAt(unit.Path); err == nil && !at.IsZero() {
 				service.StateChangedAt = &at
+			}
+
+			// `.service` only. A timer, target or mount has neither property, and asking answers with an
+			// unknown-property error — so this filters rather than treating a normal answer as a fault.
+			if strings.HasSuffix(unit.Name, ".service") {
+				if n, err := conn.Restarts(unit.Path); err == nil {
+					service.Restarts = &n
+				}
+
+				// `MemoryUnknown` is `(uint64) -1` — what systemd answers when the unit has no memory
+				// accounting. Dropped rather than stored: believed, it is sixteen exabytes.
+				if b, err := conn.MemoryCurrent(unit.Path); err == nil && b != dbus.MemoryUnknown {
+					service.MemoryBytes = &b
+				}
 			}
 		}
 

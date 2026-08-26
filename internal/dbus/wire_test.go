@@ -163,3 +163,18 @@ func TestTheTimestampIsMicrosecondsAndZeroMeansUnknown(t *testing.T) {
 		t.Fatalf("microseconds decoded to %s, which is not a plausible timestamp", got)
 	}
 }
+
+// A unit with no memory accounting answers `(uint64) -1`, and believing it reports sixteen exabytes.
+//
+// The value is what systemd genuinely sends — it is not an error, and the call succeeds — so the only
+// thing standing between it and a page claiming a 16 EB service is the caller checking for it.
+func TestMemoryUnknownIsTheMaximumValueNotZero(t *testing.T) {
+	if MemoryUnknown != 18446744073709551615 {
+		t.Fatalf("MemoryUnknown is %d, which is not what systemd answers for an unaccounted unit", MemoryUnknown)
+	}
+
+	// The number a page would print if this were treated as a measurement.
+	if gb := float64(MemoryUnknown) / 1e9; gb < 1e9 {
+		t.Fatalf("sanity: %f GB is not the absurd figure this guard exists to prevent", gb)
+	}
+}
