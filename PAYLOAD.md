@@ -6,6 +6,19 @@ This is a **public contract**. The agent is one implementation of it; anyone may
 endpoint does not care which is talking to it. So this document is the specification rather than a
 description of our code, and where the two disagree the endpoint's validation is the authority.
 
+**Contract version 2** — current as of agent `v0.5.0`.
+
+Every change so far has been *additive*, and that is the rule rather than a run of luck: a field is added,
+never repurposed, and never made required after the fact. A sender written against version 1 keeps working
+against a version 2 endpoint, and a version 2 sender talking to an older endpoint has its unknown fields
+ignored. If that ever has to break, this document gets a version 3 section and both are served for as long
+as anyone is running the old one.
+
+| Version | Added |
+|---|---|
+| 2 | `disk_usage.accounted_bytes`, `disk_usage.unreadable[]`, `disk_usage.more_unreadable`, the `too_frequent` skip reason, and `min_interval_seconds` in the response |
+| 1 | The batch envelope, samples, mounts, processes, services, system facts, `disk_usage` |
+
 The quickest way to see it for real is on your own machine, with your own data:
 
 ```sh
@@ -78,7 +91,38 @@ nothing rather than a guess.
 |---|---|
 | `agent_version` | string ≤32. Shown in the UI, so a fleet running a version with a known bug is visible rather than something to be discovered |
 | `failed` | `{"collector": "reason"}`, max 32, reasons ≤255. Collectors that could not read what they were asked for. Reported rather than hidden — silently sending fewer fields looks identical to a machine that has less to say |
-| `disk_usage` | One mount's directory breakdown. Rides on whichever push follows the walk |
+| `disk_usage` | One mount's directory breakdown. Rides on whichever push follows the walk — see below |
+
+## `disk_usage`
+
+A bounded walk of one mount, sent at most hourly and on whichever push happens to follow it. Absent from
+nearly every push, and **absent is not empty**: absent means no walk has finished since the last one, while
+an empty `dirs` means the walk ran and found nothing to report.
+
+| Field | Type | Notes |
+|---|---|---|
+| `mount_point` | string ≤191 | Which mount was walked |
+| `scanned_at` | RFC3339 | |
+| `dirs[]` | array, max 16 | The largest directories found. Not a tree: bucketed at four levels deep, so there is no parent node above a reported path |
+| `dirs[].path` | string ≤512 | Longer than a mount point on purpose — truncating a deep path names nothing |
+| `dirs[].bytes` | int ≥0 | Apparent file sizes summed, not block accounting |
+| `dirs[].kind` | string ≤64 | A plain-language name where the walker recognises the location — "docker images and containers". Absent rather than guessed: being wrong here has somebody delete the wrong thing |
+| `partial` | bool | The walk ran out of time. Means *there may be more of the same* |
+| `accounted_bytes` | int ≥0 | **Everything the walk summed**, including directories that did not make `dirs`. The server subtracts it from what `statfs` reports for the mount, and the difference is the honest size of what could not be seen. Summing `dirs` instead would put that remainder out by whatever lost the ranking |
+| `unreadable[]` | array, max 16 | Directories the walk was refused. A different claim from `partial`: *there is definitely more, and here is where* |
+| `unreadable[].path` | string ≤512 | |
+| `unreadable[].mode` | string ≤8 | Octal as `ls -l` shows it — `0710`. `stat` needs execute permission on the *parent*, not the target, so a directory that cannot be listed can still be named |
+| `unreadable[].root_owned` | bool | Owned by uid 0 — the difference between "this is how the distribution ships it" and "somebody's permissions are wrong" |
+| `more_unreadable` | int ≥0 | Refusals collected but not named. **Send this.** A truncated list that looks complete is what made the first version of this feature misleading rather than merely incomplete |
+
+**No size is ever attached to an unreadable directory.** There is no unprivileged way to learn the size of
+a directory you cannot enter, so any number beside the path could only be invented. The subtraction above
+is the honest form of that answer.
+
+Rank before truncating. Refusals arrive in walk order, walk order is alphabetical, and on a stock Linux
+host the first several are `/etc/credstore`, `/etc/ssl/private`, `/etc/sudoers.d` and `/lost+found` — a few
+kilobytes between them — while `/var/lib/docker`, which is usually the answer, arrives long after a
+first-come list is full.
 
 ## The lengths are not advisory
 
@@ -106,7 +150,8 @@ Deliberately asymmetric, because the future and the past are different problems.
   "accepted": 2,
   "skipped": [ { "index": 0, "reason": "already_covered", "collected_at": "…" } ],
   "server_time": "2026-08-26T08:19:51Z",
-  "ingest_url": "https://ingest.infranest.app"
+  "ingest_url": "https://ingest.infranest.app",
+  "min_interval_seconds": 60
 }
 ```
 
@@ -120,11 +165,22 @@ Deliberately asymmetric, because the future and the past are different problems.
 | `429` | Rate limited |
 
 **`skipped` is a verdict, not an error.** Every reason it can carry — `already_covered`, `too_old`,
-`ahead_of_server_time` — is terminal: none comes good by being sent again, and holding one blocks
-everything behind it. A sender must drop those readings.
+`ahead_of_server_time`, `too_frequent` — is terminal: none comes good by being sent again, and holding one
+blocks everything behind it. A sender must drop those readings.
+
+`too_frequent` means the reading arrived faster than the plan stores them. It is not the sender doing
+anything wrong — the server is keeping less than was offered — and a push whose readings are **all**
+dropped that way answers `200`, not `422`. That is the ordinary case for a fast sender on a slow plan, and
+answering it as a failure would have the sender keep those readings and offer them again for ever.
 
 `server_time` lets a sender measure its own clock against the server's and say so, rather than having
 every push refused for a reason only the response knows.
+
+`min_interval_seconds` is how often the server will **store** a reading, from the plan. Absent when there
+is no floor. Honouring it saves the request rather than only the write, which is the expensive half — but
+adopt it **only downward**: a response saying "I keep one every five minutes" is a reason to send less
+often, never a reason to send more. A response able to lower a sender's interval could make every agent
+busier, which is the same shape as the redirect guard below.
 
 `ingest_url` names where readings should go from now on. **A client should adopt it only over HTTPS and
 only within the same registrable domain as where it is already sending** — that allows a fleet to be moved

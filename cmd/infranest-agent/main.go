@@ -102,9 +102,10 @@ func run(args []string, stdout, stderr *os.File) error {
 	case "uninstall":
 		return showUninstall(stdout, environment(*configPath))
 	case "flare":
-		// Recognised, so the error says what is actually true rather than "unknown command", which would
-		// send someone hunting for a typo that is not there.
-		return fmt.Errorf("%q is not implemented yet", command)
+		// Everything a support conversation needs, with the token removed before anything is printed.
+		// The alternative is asking somebody to paste a file containing a live credential into a ticket,
+		// and they will, because it is what was asked for.
+		return agent.WriteFlare(stdout, environment(*configPath), version, time.Now())
 	default:
 		return fmt.Errorf("unknown command %q — run without arguments for usage", command)
 	}
@@ -283,7 +284,7 @@ Commands:
   run         collect continuously and send — this is what the service runs
   status      whether readings are being delivered, and if not, why not
   uninstall   print the exact commands that remove this installation
-  flare       a redacted bundle for a support ticket              (not implemented yet)
+  flare       a redacted bundle for a support ticket — no token in it
 
 Flags:
   --version        print version information and exit
