@@ -126,14 +126,24 @@ jobs:
       # One file per artifact, because that is what install.sh fetches, plus a single manifest for anyone
       # verifying the set. The manifest is also what a signature will cover when #782's key decision is
       # made — signing one file rather than twelve.
+      # The installers ship *with* the release, which is what lets get.infranest.app redirect to
+      # `/releases/latest/download/` and never need editing again. Pinning a tag in the redirect would
+      # mean a config change on somebody else's server every time we release, and a release nobody
+      # remembers to wire up is one customers cannot install.
+      #
+      # They are checksummed alongside the binaries below, so the script itself can be verified before
+      # it is run — which is the whole argument for offering the two-step path at all.
+      - name: The installers ride along
+        run: cp install.sh install.ps1 dist/
+
       - name: Checksums
         working-directory: dist
         run: |
-          for f in infranest-agent_*; do
+          for f in *; do
             case "$f" in *.sha256|SHA256SUMS) continue ;; esac
             sha256sum "$f" > "$f.sha256"
           done
-          sha256sum infranest-agent_* > SHA256SUMS
+          sha256sum infranest-agent_* install.sh install.ps1 > SHA256SUMS
           cat SHA256SUMS
 
       # Keyless: no private key exists, here or anywhere. The attestation records which commit, which
