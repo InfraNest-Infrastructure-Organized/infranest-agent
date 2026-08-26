@@ -16,7 +16,7 @@ as anyone is running the old one.
 
 | Version | Added |
 |---|---|
-| 2 | `disk_usage.accounted_bytes`, `disk_usage.unreadable[]`, `disk_usage.more_unreadable`, the `too_frequent` skip reason, and `min_interval_seconds` in the response |
+| 2 | `disk_usage.accounted_bytes`, `disk_usage.unreadable[]`, `disk_usage.more_unreadable`, the `too_frequent` skip reason, `min_interval_seconds` in the response, and the 8 MB body limit stated with the rule that snapshots ride the newest sample only |
 | 1 | The batch envelope, samples, mounts, processes, services, system facts, `disk_usage` |
 
 The quickest way to see it for real is on your own machine, with your own data:
@@ -123,6 +123,31 @@ Rank before truncating. Refusals arrive in walk order, walk order is alphabetica
 host the first several are `/etc/credstore`, `/etc/ssl/private`, `/etc/sudoers.d` and `/lost+found` — a few
 kilobytes between them — while `/var/lib/docker`, which is usually the answer, arrives long after a
 first-come list is full.
+
+## Snapshots belong on the newest sample only
+
+`services`, `processes` and `system` describe **now**, not the moment a reading was taken. The server
+applies them from the newest sample in the batch and ignores them on every other one — deliberately,
+because applying each in turn would leave the disk card showing whichever happened to be last in the
+payload: an hour-old state presented as current.
+
+So sending them on every sample is sixty copies of one answer, and it is not free. At the caps this
+document publishes:
+
+| | |
+|---|---|
+| worst-case sample **with** snapshots | 180,119 bytes |
+| worst-case sample, metrics only | 30,013 bytes |
+| 180 samples all carrying snapshots | **32.4 MB** |
+| 179 metrics-only + 1 with snapshots | **5.6 MB** |
+
+**The endpoint accepts a request body of 8 MB.** The first shape does not fit and is rejected by the web
+server *before* any of this validation runs — which means no per-reading verdict, so the batch is never
+settled, so a store-and-forward sender keeps it and retries it for ever. The second fits with room.
+
+`mounts` is **not** a snapshot and must stay on every sample. It looks like one, but `worst_mount_percent`
+is derived per reading and is what a disk rule averages over its window — a backfilled sample without
+mounts is a hole in that series rather than a saving.
 
 ## The lengths are not advisory
 
