@@ -329,8 +329,8 @@ send it in the clear.
 | `infranest-agent print` | one collection cycle to stdout, sending nothing |
 | `infranest-agent run` | collect and send continuously — this is what the service runs |
 | `infranest-agent status` | whether readings are being delivered, and if not, why not |
-| `infranest-agent flare` | a redacted bundle for a support ticket, with secrets stripped *(not yet)* |
-| `infranest-agent uninstall` | removes the unit, user, binary, config and state *(not yet)* |
+| `infranest-agent flare` | a redacted bundle for a support ticket — the token is never in it |
+| `infranest-agent uninstall` | prints the exact commands that remove this installation — it cannot run them itself, because the agent starts no subprocesses |
 | `infranest-agent --version` | version, commit, build date |
 
 `status` answers from what is on the machine and reaches nothing. That is deliberate: the question is
@@ -348,6 +348,22 @@ FAILING — last delivery succeeded 4m12s ago, but the most recent attempt did n
   Last error: cannot reach InfraNest: dial tcp: i/o timeout
   Readings are being kept and will be sent when this clears.
 ```
+
+### `flare` — what to send with a support ticket
+
+```sh
+sudo infranest-agent flare
+```
+
+Prints a JSON bundle: version, platform, the resolved configuration, the on-disk state, how many readings
+are waiting in the spool, and what a live collection cycle could not read.
+
+**The token is never in it** — not truncated, not hashed. A prefix confirms which token it is to anyone
+holding the list, and a hash is a credential's fingerprint; neither helps diagnose anything, and a flare
+gets pasted into tickets, chat threads and screenshots. What is included is whether a token is *present*
+and how long it is, because a token truncated by a copy-paste is a real failure and an invisible one.
+
+It generates even when the configuration is broken. That is one of the reasons somebody runs it.
 
 ## Where it sends
 
