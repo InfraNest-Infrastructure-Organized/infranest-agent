@@ -259,39 +259,49 @@ func TestARegularFileOnTheMountItselfIsCounted(t *testing.T) {
 	}
 }
 
-func TestAnExhaustedBudgetThinsEverySubtreeNotTheAlphabeticalTail(t *testing.T) {
-	// One clock for the whole walk is alphabetical amputation: /bin through /usr get counted in full and
-	// /var — the directory actually filling the disk on nearly every server — is never reached, and the
-	// result is labelled merely "partial". Sharing the budget makes a truncated answer uniformly thin
-	// instead, which is wrong in a way that still points the right way.
+func TestTheBudgetIsSharedBetweenTopLevelDirectoriesNotRacedAsOneClock(t *testing.T) {
+	// One clock is alphabetical amputation: /bin through /usr get counted in full and /var — the directory
+	// actually filling the disk on nearly every server — is never reached, and the result is labelled
+	// merely "partial". A share each makes a truncated answer uniformly thin instead.
+	//
+	// Asserted on the arithmetic rather than by racing a real walk. The racing version failed on CI and
+	// passed locally, for a reason that is not a bug: at the budgets that make a walk truncate, the clock
+	// expires before the first ReadDir returns, and *every* strategy — shared or not — scans only the
+	// first directory. There is no wall-clock scale at which the difference is reliably observable.
+	if got := usageShare(6*time.Second, 6); got != time.Second {
+		t.Fatalf("six directories should get a second each, got %s", got)
+	}
+
+	// The last one gets everything still unspent, not a sixth of the original budget: five directories
+	// that finished quickly hand their slots back rather than leaving the sixth with a token share.
+	if got := usageShare(5*time.Second, 1); got != 5*time.Second {
+		t.Fatalf("the last directory should get what is left, got %s", got)
+	}
+
+	// Nothing left to walk. Dividing by zero here would panic on a mount whose entries were all skipped.
+	if got := usageShare(time.Second, 0); got != 0 {
+		t.Fatalf("no directories left should get no time, got %s", got)
+	}
+}
+
+func TestEveryTopLevelDirectoryIsReachedWhenThereIsTimeForAll(t *testing.T) {
+	// The other half of the split budget: with time to spare, sharing it must not leave anyone out. A
+	// share that came back zero, or a loop that stopped at the first subtree, would look exactly like a
+	// scan that ran out of time — and would be silently wrong on every machine rather than only on busy
+	// ones.
 	root := t.TempDir()
-
-	// Enough files per subtree that a sub-millisecond share cannot finish any of them outright, and
-	// enough subtrees that a single clock would never reach the last.
-	for _, name := range []string{"a", "b", "c", "d", "e", "f"} {
-		for i := range 400 {
-			write(t, filepath.Join(root, name, strconv.Itoa(i)+".bin"), 64)
-		}
+	names := []string{"a", "b", "c", "d", "e", "f"}
+	for _, name := range names {
+		write(t, filepath.Join(root, name, "f.bin"), 1000)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
-	defer cancel()
-	// Give the deadline a moment to be genuinely tight rather than generous.
-	scan := ScanUsage(ctx, root)
+	scan := ScanUsage(context.Background(), root)
 
-	if !scan.Partial {
-		t.Skip("the machine finished the walk inside the budget — nothing to assert about truncation")
+	if scan.Partial {
+		t.Fatal("a walk of six small directories should not run out of budget")
 	}
-
-	// The tail of the alphabet is the assertion. Under one clock, "f" is unreachable by construction.
-	var reached int
-	for _, d := range scan.Dirs {
-		if strings.HasSuffix(d.Path, "e") || strings.HasSuffix(d.Path, "f") {
-			reached++
-		}
-	}
-	if reached == 0 && len(scan.Dirs) > 0 {
-		t.Fatalf("only the head of the alphabet was scanned: %+v", scan.Dirs)
+	if len(scan.Dirs) != len(names) {
+		t.Fatalf("not every directory was reached: %+v", scan.Dirs)
 	}
 }
 

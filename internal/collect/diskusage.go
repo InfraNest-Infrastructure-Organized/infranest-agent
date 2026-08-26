@@ -192,8 +192,7 @@ func ScanUsage(ctx context.Context, mountPoint string) UsageScan {
 			break
 		}
 
-		share := time.Until(mustDeadline(deadline)) / time.Duration(len(subtrees)-i)
-		scan.walk(deadline, share, root, subtree, rootDepth, totals)
+		scan.walk(deadline, usageShare(time.Until(mustDeadline(deadline)), len(subtrees)-i), root, subtree, rootDepth, totals)
 	}
 
 	// Asked once at the end rather than only inside the walk. A mount with no subdirectories to walk —
@@ -213,6 +212,23 @@ func ScanUsage(ctx context.Context, mountPoint string) UsageScan {
 	}
 
 	return scan
+}
+
+// usageShare is how long one top-level directory gets out of what is left.
+//
+// Its own function because it is the whole of the change and the only part that can be checked without
+// racing a clock: an integration test at this scale is a coin toss on a loaded CI runner, where the
+// budget expires before the first `ReadDir` returns and *every* strategy scans only the first directory.
+//
+// `left` is how many directories still have to be walked, including this one, so the arithmetic is
+// remaining ÷ remaining-directories rather than a slice decided up front. Recomputing it means a directory
+// that finishes in milliseconds hands its unused share to the ones after it.
+func usageShare(remaining time.Duration, left int) time.Duration {
+	if left <= 0 {
+		return 0
+	}
+
+	return remaining / time.Duration(left)
 }
 
 // mustDeadline is the deadline of a context that was built with one. `WithTimeout` always sets it; the
