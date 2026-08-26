@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/collect"
@@ -202,6 +203,18 @@ func (r *Runner) scanUsageIfDue(ctx context.Context, state *State) {
 
 	if scan.Partial {
 		r.logf("disk usage scan of %s ran out of budget — reporting what it found", mount)
+	}
+
+	// Worth its own line: the two are different claims. Out of budget means there may be more of the
+	// same; refused means there is definitely more, the server can say how much by subtracting what was
+	// counted from what statfs reports, and this names where to look.
+	if len(scan.Unreadable) > 0 {
+		names := make([]string, 0, len(scan.Unreadable))
+		for _, dir := range scan.Unreadable {
+			names = append(names, dir.Path)
+		}
+
+		r.logf("disk usage scan of %s could not read %s — their contents are not in the breakdown", mount, strings.Join(names, ", "))
 	}
 }
 

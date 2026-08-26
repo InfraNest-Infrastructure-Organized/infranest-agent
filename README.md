@@ -52,6 +52,7 @@ is the first thing documented rather than a debugging flag buried at the bottom.
 | **CPU** | user + system time, as a percentage. Deliberately **not** `100 - idle`, which counts steal (CPU the hypervisor gave another tenant) and iowait — on a shared vCPU those are most of a false alarm, and neither is load this machine can do anything about |
 | **Memory** | used and total, plus swap. "Used" is total minus `MemAvailable`, not minus `MemFree` — counting the page cache as used makes a healthy Linux box look permanently full |
 | **Disk space** | per mount: device, mount point, used, total |
+| **What is filling a disk** | at most hourly, and only for the fullest mount: the largest directories, bounded to a few seconds and to four levels deep. Answers the question the percentage cannot — a disk at 94% is not actionable until you know it is the journal. Directories the agent is not allowed to read are **named**, and the total it did count is sent so the difference from the mount's real usage can be shown as unaccounted for. See [what it cannot see](#what-it-cannot-see) |
 | **Load average** | 1 / 5 / 15 minute |
 | **Uptime** | seconds since boot |
 | **Processes** | the largest few by memory, off by default. Sorted by memory rather than CPU because a CPU share needs two readings per process, which means walking all of `/proc` twice. **Arguments are omitted** — command lines routinely carry credentials, so the executable name is what gets sent unless you ask otherwise |
@@ -219,6 +220,26 @@ Run it as the `infranest-agent` user, with `/etc/infranest/agent.conf` in its en
 
 A dedicated unprivileged system user under a hardened systemd unit. It does not run as root: CPU, memory,
 load, network and mount usage are all readable without it.
+
+### What it cannot see
+
+Running unprivileged has one visible cost, and it is in the "what is filling this disk" breakdown.
+
+Some directories are closed to everyone but root — on a stock Docker host, `/var/lib/docker` is
+`drwx--x--- root:root`, and on most distributions so are `/root` and `/var/lib/private`. `du` behaves the
+same way for the same reason: run as an ordinary user it reports `4.0K` for a twelve-gigabyte Docker tree,
+prints the refusal to stderr, and exits successfully.
+
+The agent does not pretend otherwise, and does not ask for root to fix it:
+
+- it **names** each directory it was refused, with the owner and mode, so `/var/lib/docker` is something
+  you can see rather than something missing;
+- it reports the total it *did* count, and the mount's real usage comes from `statfs`, which needs no
+  privilege. The difference is shown as **not accounted for** — so a breakdown covering a quarter of the
+  disk says so, instead of presenting that quarter as the whole picture.
+
+If you want the contents counted, grant the agent's user read access to that directory. Nothing here needs
+it to run as root.
 
 ```
 User=infranest-agent

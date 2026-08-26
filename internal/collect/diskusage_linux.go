@@ -3,6 +3,7 @@
 package collect
 
 import (
+	"io/fs"
 	"os"
 	"syscall"
 )
@@ -35,4 +36,16 @@ func isOtherFilesystem(root, path string) bool {
 	}
 
 	return rootSys.Dev != pathSys.Dev
+}
+
+// isRootOwned reports whether a directory belongs to uid 0.
+//
+// Only meaningful next to a directory the agent was refused: root ownership is the difference between
+// "this is how the distribution ships it" and "somebody's permissions are wrong". /var/lib/docker is
+// root:root 0710 on a stock install, and telling an operator that is what stops them going looking for a
+// misconfiguration that is not there.
+func isRootOwned(info fs.FileInfo) bool {
+	sys, ok := info.Sys().(*syscall.Stat_t)
+
+	return ok && sys.Uid == 0
 }
