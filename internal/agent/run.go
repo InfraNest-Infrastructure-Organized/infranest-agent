@@ -260,6 +260,10 @@ func (r *Runner) sendOnce(ctx context.Context, url *string, state *State) error 
 		samples = append(samples, e.Data)
 	}
 
+	// The server keeps snapshots from the newest reading only, so sending them on all sixty is sixty
+	// copies of one answer — and the batch is only ever large because the network is already the problem.
+	samples = trimSnapshots(samples)
+
 	state.LastAttemptAt = r.Now()
 
 	// Explicitly untyped when there is nothing to send. A nil `*collect.UsageScan` placed in an `any`
