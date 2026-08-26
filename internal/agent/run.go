@@ -69,6 +69,9 @@ type Runner struct {
 
 	// A finished scan waiting for the next push. Not spooled — see sendOnce.
 	pendingUsage *collect.UsageScan
+
+	// The plan's storage cadence, as last stated by a push response (#886). Zero until one says.
+	serverInterval time.Duration
 }
 
 // Run collects on a fixed cadence and delivers whatever is waiting, until the context is cancelled.
@@ -108,7 +111,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			r.logf("waiting %s before the next attempt", backoff.Round(time.Second))
 		}
 
-		wait := r.Config.Interval
+		wait := r.interval()
 		if backoff > wait {
 			wait = backoff
 		}
@@ -324,6 +327,19 @@ func (r *Runner) sendOnce(ctx context.Context, url *string, state *State) error 
 		r.logf("the server did not store a reading from %s: %s", s.CollectedAt.Format(time.RFC3339), s.Reason)
 	}
 
+	// The plan's storage cadence (#886). Adopted only when it is *slower* than the configured interval:
+	// the server saying "I keep one reading every five minutes" is a reason to send less often, never a
+	// reason to send more. An operator who configured a two-minute interval on a plan that stores every
+	// thirty seconds asked for two minutes, and a server that could raise it would be able to turn any
+	// agent into a busier one by answering a push.
+	//
+	// Held in memory rather than written to the config file: the config is the operator's, and a value
+	// that arrives over the wire rewriting a file they own is a surprise. It costs one push to relearn.
+	if result.MinInterval > r.Config.Interval && result.MinInterval != r.serverInterval {
+		r.logf("InfraNest stores one reading every %s on this plan — sampling at that rate from now on", result.MinInterval)
+		r.serverInterval = result.MinInterval
+	}
+
 	if adopted, ok := config.Adopt(*url, result.IngestURL); ok {
 		r.logf("InfraNest asked for readings to go to %s from now on", adopted)
 		*url = adopted
@@ -333,6 +349,19 @@ func (r *Runner) sendOnce(ctx context.Context, url *string, state *State) error 
 	r.save(*state)
 
 	return nil
+}
+
+// interval is how long to wait before the next reading.
+//
+// The larger of what the operator configured and what the server says it stores. Both directions matter:
+// sampling faster than the server keeps is work thrown away at the far end, and sampling slower than
+// configured is not something a push response gets to ask for.
+func (r *Runner) interval() time.Duration {
+	if r.serverInterval > r.Config.Interval {
+		return r.serverInterval
+	}
+
+	return r.Config.Interval
 }
 
 func (r *Runner) save(state State) {
