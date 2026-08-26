@@ -22,15 +22,21 @@ jobs:
     name: Build, verify reproducible, publish
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Actions pinned by digest, not by tag — the same as ci.yml, and it matters more here. This job
+      # produces the binaries customers install as a system service; a moved tag on a third-party action
+      # would inject straight into them, which is the supply-chain shape #782 exists to prevent. A
+      # floating tag in a release pipeline is the one place it is least defensible.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The build stamps the commit, and a shallow clone cannot describe one.
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.23'
-          check-latest: false
+          # From go.mod, never a literal. Pinned to '1.23' this job would have failed on the first tag —
+          # go.mod says 1.24 — and a release pipeline that cannot run is discovered at the worst moment.
+          go-version-file: go.mod
+          check-latest: true
 
       # Everything downstream reads these, so they are computed once. SOURCE_DATE_EPOCH comes from the
       # *commit*, never from `now`: a build stamped with the wall clock is a build that cannot be
@@ -137,7 +143,7 @@ jobs:
       # It proves *who built this*. It does not prove the source is good — the reproducible build above
       # is what answers that, and it needs no third party at all. The release notes say so in that order.
       - name: Attest what was built
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: 'dist/infranest-agent_*'
 
