@@ -34,6 +34,32 @@ type Spool struct {
 
 const DefaultMax = 500
 
+// Count is how many readings are waiting, and creates nothing.
+//
+// Separate from New because New *makes* the directory, and a read-only caller must not. `status` used
+// New to get this number, so running `sudo infranest-agent status` created /var/lib/infranest-agent/spool
+// owned by root — after which the agent, which runs unprivileged, could never write to it again. The
+// command that exists to diagnose the agent permanently broke it, and then reported "nothing delivered
+// yet, give it a minute" for ever, because a spool it cannot write is also a spool it cannot read.
+//
+// Found by an operator following our own instructions on a real server.
+func Count(dir string) int {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		// Absent, or unreadable. Neither is a number, and neither is worth creating anything over.
+		return 0
+	}
+
+	n := 0
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+			n++
+		}
+	}
+
+	return n
+}
+
 func New(dir string) (*Spool, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("cannot create the spool directory %s: %w", dir, err)

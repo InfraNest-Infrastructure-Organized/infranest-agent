@@ -166,7 +166,16 @@ func (r *Runner) collectOnce(seq int64, state *State) {
 
 	if err := r.Spool.Add(seq, sample); err != nil {
 		r.logf("could not spool the reading: %v", err)
+		// Recorded where `status` will find it, not only in the journal. A reading that cannot be written
+		// is never sent, so `LastError` — which only the *send* path used to set — stayed empty, and
+		// `status` reported "nothing delivered yet, give it a minute" for as long as the machine ran.
+		// The command that exists to answer "why is nothing arriving" was the one place the answer was
+		// missing.
+		state.SpoolError = err.Error()
+	} else {
+		state.SpoolError = ""
 	}
+	r.save(*state)
 }
 
 // scanUsageIfDue walks the fullest mount, at most once an hour, and holds the answer for the next push.

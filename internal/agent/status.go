@@ -31,15 +31,23 @@ func Status(w io.Writer, cfg config.Config, now time.Time) {
 	fmt.Fprintf(w, "Every:        %s\n", cfg.Interval)
 	fmt.Fprintf(w, "State in:     %s\n", cfg.StateDir)
 
-	queued := 0
-	if s, err := spool.New(cfg.StateDir + "/spool"); err == nil {
-		queued = s.Len()
-	}
+	// Counted without opening — and above all without *creating*. `status` is a read: it must not leave
+	// anything behind on a machine, least of all a root-owned directory the agent then cannot write to.
+	queued := spool.Count(cfg.StateDir + "/spool")
 	fmt.Fprintf(w, "Waiting:      %d reading(s) not yet delivered\n", queued)
 
 	fmt.Fprintln(w)
 
 	switch {
+	case state.SpoolError != "":
+		// Named before everything else because nothing downstream can work: a reading that cannot be
+		// written is never sent, so every other line here would describe a symptom of this.
+		fmt.Fprintln(w, "NOT COLLECTING — readings cannot be written to disk.")
+		fmt.Fprintf(w, "  %s\n", state.SpoolError)
+		fmt.Fprintln(w, "  Usually an ownership problem on the state directory. To check and fix:")
+		fmt.Fprintf(w, "    ls -ld %s/spool\n", cfg.StateDir)
+		fmt.Fprintf(w, "    sudo chown -R infranest-agent:infranest-agent %s\n", cfg.StateDir)
+		fmt.Fprintln(w, "    sudo systemctl restart infranest-agent")
 	case state.NotActivated:
 		// Named before the token case and worded to stop the obvious wrong move. The natural reading of
 		// "InfraNest is refusing this" is that the credential is dead, and the natural response to a dead
