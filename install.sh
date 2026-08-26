@@ -171,9 +171,41 @@ chmod 0750 "$STATE_DIR"
 umask 077
 cat > "${CONF_DIR}/agent.conf" <<CONF
 # InfraNest agent configuration.
-# This file contains a credential. It is mode 0600 and owned by ${USER_NAME} on purpose.
+#
+# Read by systemd through EnvironmentFile=, so this is a plain KEY=value file — no quotes, no shell
+# expansion, one setting per line. Restart the service after editing:
+#
+#   sudo systemctl restart infranest-agent
+#
+# This file contains a credential. It is mode 0600 and owned by ${USER_NAME} on purpose, which is also
+# why \`infranest-agent status\` needs sudo: as yourself you cannot read it.
+
+# The server this agent reports as. Issued per server in InfraNest, and it identifies which one — so it
+# must not be copied to a second machine. Two machines sharing a token write into one series, and
+# nothing detects it: the numbers blend and the agent-silence rule can never fire, because whichever
+# machine is still up keeps checking in for both.
 INFRANEST_TOKEN=${TOKEN}
+
+# Where readings go. The base URL only — the agent appends /api/metrics/push itself.
 INFRANEST_URL=${API_URL}
+
+# How often to collect. Between 10s and 5m; 60s if unset. Every reading is spooled to disk first, so a
+# shorter interval costs bandwidth rather than data loss.
+#INFRANEST_INTERVAL=60s
+
+# The busiest few processes, by memory. Off by default: full command lines routinely carry credentials,
+# and INFRANEST_PROCESS_ARGS is a second, separate decision for exactly that reason.
+#INFRANEST_PROCESSES=1
+#INFRANEST_PROCESS_ARGS=1
+
+# systemd units that were set up to run, and which have failed. On by default — it carries no command
+# lines, and a unit that has given up moves no metric at all, so a machine without this looks healthy
+# while its backup timer is dead. Set to 0 and the agent never opens the D-Bus socket.
+#INFRANEST_SERVICES=0
+
+# The spool and the last-run record. Everything in it is disposable: losing it costs undelivered
+# readings and nothing else.
+#INFRANEST_STATE_DIR=/var/lib/infranest-agent
 CONF
 chown "$USER_NAME":"$USER_NAME" "${CONF_DIR}/agent.conf"
 chmod 0600 "${CONF_DIR}/agent.conf"
@@ -221,7 +253,9 @@ echo "See exactly what this machine will send, right now:"
 echo "    ${BIN_DIR}/infranest-agent print"
 echo
 echo "Check it is working:"
-echo "    ${BIN_DIR}/infranest-agent status"
+# `sudo`, because agent.conf is 0600 and owned by the agent's own user — which is the point of it, and
+# which makes `status` as yourself fail with a message about the token rather than about permissions.
+echo "    sudo ${BIN_DIR}/infranest-agent status"
 echo
 echo "Remove it completely:"
 echo "    sudo sh $0 --uninstall"

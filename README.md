@@ -67,6 +67,10 @@ service has no session to authenticate with, so the restriction is the operating
 promise about our code. CI fails the build if a unit-control method name ever appears in the source.
 `INFRANEST_SERVICES=0` turns the collector off, and the socket is then never opened.
 
+Every field, with its type, its bounds and what the server does with it, is in
+**[PAYLOAD.md](PAYLOAD.md)** — a public contract rather than a description of this code, so anyone can
+write another agent against it.
+
 Memory, disk space, load average and processes cannot be read from a cloud provider's API at all. They are
 the reason this exists: a full disk and an out-of-memory kill are what actually take a server down, and no
 provider API reports either.
@@ -157,9 +161,12 @@ It does not touch anything else, and it does not need to reach the internet agai
 
 ### Check it worked
 
+`status` needs `sudo`: the token file is readable only by the agent's own user, which is the point of it.
+`print` does not — it reads the machine, not the configuration.
+
 ```sh
-infranest-agent print     # exactly what this machine sends, printed instead of sent
-infranest-agent status    # what is being collected, and when the last send succeeded
+infranest-agent print          # exactly what this machine sends, printed instead of sent
+sudo infranest-agent status    # what is being collected, and when the last send succeeded
 ```
 
 ### Remove it

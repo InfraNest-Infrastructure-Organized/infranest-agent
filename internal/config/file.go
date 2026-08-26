@@ -82,11 +82,22 @@ func withFileFallback(getenv func(string) string) func(string) string {
 		path = DefaultConfigPath(getenv)
 	}
 
-	// A file we cannot read is not an error here. If it held the token, the missing-token error says so
-	// far more usefully than a permissions message about a path the reader has never heard of.
-	values, _ := readFile(path)
+	values, err := readFile(path)
+
+	// A file that is *there* and unreadable is a different problem from one that is absent, and the
+	// difference is the whole answer. Somebody who has just run the installer — which printed "wrote
+	// /etc/infranest/agent.conf" — and then runs `status` as themselves gets told the token is not set,
+	// which contradicts what they just watched happen and points at the wrong fix. The file is 0600 and
+	// owned by the agent user, on purpose; the answer is `sudo`, and nothing was saying so.
+	unreadable := ""
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		unreadable = path
+	}
 
 	return func(key string) string {
+		if key == unreadableKey {
+			return unreadable
+		}
 		if v := getenv(key); v != "" {
 			return v
 		}
@@ -94,3 +105,8 @@ func withFileFallback(getenv func(string) string) func(string) string {
 		return values[key]
 	}
 }
+
+// unreadableKey is how withFileFallback reports a config file it could not open, through the same
+// getenv-shaped channel everything else here travels down. Not a real environment variable — the leading
+// space cannot appear in one, so nothing on the machine can collide with it.
+const unreadableKey = " config-unreadable"

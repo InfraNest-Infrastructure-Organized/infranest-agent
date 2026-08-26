@@ -76,6 +76,13 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 
 	if c.Token == "" {
+		// Say which of the two it is. "Not set" is true either way and useless in the common case: the
+		// file is 0600 and owned by the agent user by design, so a person running `status` as themselves
+		// hits this immediately after an install that told them the file was written.
+		if path := getenv(unreadableKey); path != "" {
+			return c, fmt.Errorf("cannot read %s — it is readable only by the agent's own user. Try: sudo infranest-agent status", path)
+		}
+
 		return c, errors.New("INFRANEST_TOKEN is not set — the agent has nothing to authenticate with")
 	}
 	if c.URL == "" {
