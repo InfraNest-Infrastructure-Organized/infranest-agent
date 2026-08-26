@@ -35,6 +35,13 @@ type State struct {
 	NotActivated   bool      `json:"not_activated,omitempty"`
 	NotActivatedAt time.Time `json:"not_activated_at,omitempty"`
 
+	// Why the last reading could not be written to disk, if it could not.
+	//
+	// Separate from LastError, which is about *sending*. A reading that never reached the spool is never
+	// sent either, so the send path has nothing to report and the agent looks merely quiet — which is
+	// indistinguishable, from `status`, from one that has just been installed.
+	SpoolError string `json:"spool_error,omitempty"`
+
 	// What each collector last said, by name — empty when they all worked. The same map the server now
 	// stores, kept here too because the machine is where somebody looks when a chart has a hole in it,
 	// and because this half is readable when the network is not.

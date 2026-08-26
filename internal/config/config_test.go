@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -151,5 +152,61 @@ func TestAMissingConfigFileIsNotAnError(t *testing.T) {
 	_, err := Load(env(map[string]string{"INFRANEST_CONFIG": "/nonexistent/agent.conf"}))
 	if err == nil || !strings.Contains(err.Error(), "INFRANEST_TOKEN") {
 		t.Fatalf("expected the missing token to be the complaint, got %v", err)
+	}
+}
+
+// The first thing every installer hits, and it told them the wrong thing.
+//
+// /etc/infranest/agent.conf is 0600 and owned by the agent's own user, by design. So a person who has
+// just watched the installer print "wrote /etc/infranest/agent.conf" and then runs `status` as themselves
+// cannot read it — and was told "INFRANEST_TOKEN is not set", which contradicts what they just saw and
+// points at the wrong fix. Found by installing it on a real server.
+func TestAnUnreadableConfigSaysSoRatherThanBlamingTheToken(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.conf")
+
+	if err := os.WriteFile(path, []byte("INFRANEST_TOKEN=sat_secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Unreadable to everyone, including this test's own user — the closest we can get to "owned by
+	// somebody else" without being root.
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.ReadFile(path); err == nil {
+		t.Skip("running as a user that can read a 0000 file — root, most likely")
+	}
+
+	_, err := Load(func(k string) string {
+		if k == "INFRANEST_CONFIG" {
+			return path
+		}
+
+		return ""
+	})
+
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "sudo") {
+		t.Fatalf("the error does not say how to fix it: %v", err)
+	}
+	if strings.Contains(err.Error(), "is not set") {
+		t.Fatalf("the error still blames the token: %v", err)
+	}
+}
+
+// And the plain case must keep its plain message — an absent file is genuinely "no token configured".
+func TestAMissingConfigStillBlamesTheToken(t *testing.T) {
+	_, err := Load(func(k string) string {
+		if k == "INFRANEST_CONFIG" {
+			return filepath.Join(t.TempDir(), "nope.conf")
+		}
+
+		return ""
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "INFRANEST_TOKEN is not set") {
+		t.Fatalf("expected the missing-token message, got %v", err)
 	}
 }

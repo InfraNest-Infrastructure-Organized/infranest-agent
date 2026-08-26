@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -98,7 +99,9 @@ func run(args []string, stdout, stderr *os.File) error {
 		return runAgent(stdout, stderr, environment(*configPath))
 	case "status":
 		return showStatus(stdout, environment(*configPath))
-	case "flare", "uninstall":
+	case "uninstall":
+		return showUninstall(stdout, environment(*configPath))
+	case "flare":
 		// Recognised, so the error says what is actually true rather than "unknown command", which would
 		// send someone hunting for a typo that is not there.
 		return fmt.Errorf("%q is not implemented yet", command)
@@ -208,6 +211,65 @@ func showStatus(stdout *os.File, getenv func(string) string) error {
 	return nil
 }
 
+/*
+showUninstall prints the exact commands that remove this installation.
+
+**It does not perform them, and it cannot.** Removing the agent means stopping and disabling a systemd
+unit and deleting a system user, and both are subprocesses — `os/exec` is not in this binary and CI fails
+the build if it appears. Stopping the unit over D-Bus is the same story from the other direction: that is
+`StopUnit`, which polkit refuses to an unprivileged service and which CI also forbids by name.
+
+So #792 asked for "a command, not a docs page", and the honest answer is that it cannot be a command
+without giving up the property the whole agent is built around. What it can be is better than a docs page:
+the paths below are read from *this* installation rather than assumed, so they are right even where
+somebody installed to a different prefix, and they can be pasted without being adapted.
+
+A half-uninstall — deleting the config and state the binary *can* reach, leaving a running service whose
+files have vanished — would be worse than either.
+*/
+func showUninstall(w *os.File, getenv func(string) string) error {
+	// Best effort: an uninstall must work when the configuration is broken, which is one of the reasons
+	// somebody reaches for it. Where the config cannot be read, the documented defaults are printed.
+	cfg, _ := config.Load(getenv)
+
+	stateDir := cfg.StateDir
+	if stateDir == "" {
+		stateDir = "/var/lib/infranest-agent"
+	}
+	confPath := strings.TrimSpace(getenv("INFRANEST_CONFIG"))
+	if confPath == "" {
+		confPath = config.DefaultConfigPath(getenv)
+	}
+
+	binary, err := os.Executable()
+	if err != nil || binary == "" {
+		binary = "/usr/local/bin/infranest-agent"
+	}
+
+	fmt.Fprint(w, `Removing the agent takes two things this binary deliberately cannot do: stop a systemd
+unit and delete a system user. Both are subprocesses, and this agent runs none — which is
+the property that makes it worth installing. So here are the commands, filled in for
+this machine:
+
+`)
+	fmt.Fprintln(w, "  sudo systemctl disable --now infranest-agent")
+	fmt.Fprintln(w, "  sudo rm -f /etc/systemd/system/infranest-agent.service")
+	fmt.Fprintln(w, "  sudo systemctl daemon-reload")
+	fmt.Fprintf(w, "  sudo rm -f %s\n", binary)
+	fmt.Fprintf(w, "  sudo rm -rf %s %s\n", filepath.Dir(confPath), stateDir)
+	fmt.Fprintln(w, "  sudo userdel infranest-agent")
+	fmt.Fprint(w, `
+Or, if you still have the installer:
+
+  sudo sh install.sh --uninstall
+
+Nothing here phones home, and nothing is left behind once these have run: the token file
+and the spool both live in the directories above.
+`)
+
+	return nil
+}
+
 func usage(w *os.File) {
 	fmt.Fprint(w, `infranest-agent — the InfraNest monitoring agent
 
@@ -220,8 +282,8 @@ Commands:
   print       run one collection cycle and write what would be sent to stdout, sending nothing
   run         collect continuously and send — this is what the service runs
   status      whether readings are being delivered, and if not, why not
+  uninstall   print the exact commands that remove this installation
   flare       a redacted bundle for a support ticket              (not implemented yet)
-  uninstall   remove the unit, user, binary, config and state     (not implemented yet)
 
 Flags:
   --version        print version information and exit

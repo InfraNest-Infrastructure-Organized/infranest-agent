@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -511,5 +512,58 @@ func TestStatusTellsSomebodyNotToReinstallAWorkingAgent(t *testing.T) {
 	}
 	if strings.Contains(got, "rejected this token") {
 		t.Fatalf("status blamed the token for a server nobody switched on:\n%s", got)
+	}
+}
+
+// `status` is a read, and must leave nothing behind.
+//
+// It used `spool.New` to count queued readings, and New creates the directory. So
+// `sudo infranest-agent status` made /var/lib/infranest-agent/spool owned by root, and the agent — which
+// runs unprivileged, on purpose — could never write to it again. The command that exists to diagnose the
+// agent permanently broke it, and then reported "nothing delivered yet, give it a minute" for ever,
+// because a spool it cannot write is also a spool it cannot read.
+//
+// Found by an operator following our own instructions on a real server, which is the only way this was
+// ever going to be found: every test until now ran as one user.
+func TestStatusCreatesNothing(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{URL: "https://ingest.infranest.app", Interval: time.Minute, StateDir: dir}
+
+	Status(&strings.Builder{}, cfg, time.Now())
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		t.Fatalf("status created %q in the state directory", e.Name())
+	}
+}
+
+// A reading that cannot be written is never sent — so the send path has nothing to report, and `status`
+// said "nothing delivered yet, give it a minute" for as long as the machine ran.
+//
+// That is the exact sequence an operator hit: `sudo status` created a root-owned spool directory, the
+// unprivileged agent could no longer write to it, and the command that exists to answer "why is nothing
+// arriving" was the one place the answer was missing.
+func TestStatusNamesASpoolItCannotWrite(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{URL: "https://ingest.infranest.app", Interval: time.Minute, StateDir: dir}
+
+	if err := SaveState(dir, State{SpoolError: "cannot write the reading: permission denied"}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := &strings.Builder{}
+	Status(out, cfg, time.Now())
+
+	got := out.String()
+	for _, want := range []string{"NOT COLLECTING", "permission denied", "chown"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("status did not mention %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "give it a minute") {
+		t.Fatalf("status still says to wait for a reading that will never be written:\n%s", got)
 	}
 }

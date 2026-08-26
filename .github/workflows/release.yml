@@ -48,6 +48,10 @@ jobs:
           echo "commit=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
           echo "epoch=$(git log -1 --pretty=%ct)" >> "$GITHUB_OUTPUT"
           echo "date=$(git log -1 --date=format:%Y-%m-%d --pretty=%cd)" >> "$GITHUB_OUTPUT"
+          # Published with the release, because "rebuild it and compare" does not work without it:
+          # compiler output changes between Go versions, so a verifier on a different toolchain gets a
+          # different hash and no way to tell a version difference from a tampered binary.
+          echo "goversion=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
 
       # The same invariants CI enforces on every push, re-run here rather than trusted.
       #
@@ -151,6 +155,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.what.outputs.version }}
+          GOVERSION: ${{ steps.what.outputs.goversion }}
         run: |
-          sed "s/__TAG__/${TAG}/g" .github/release-notes.md > /tmp/notes.md
+          sed -e "s/__TAG__/${TAG}/g" -e "s/__GOVERSION__/${GOVERSION}/g" \
+            .github/release-notes.md > /tmp/notes.md
           gh release create "$TAG" dist/* --title "$TAG" --notes-file /tmp/notes.md
