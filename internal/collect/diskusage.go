@@ -45,6 +45,11 @@ type UsageScan struct {
 	// change exists to stop. Naming them is enough to act on: "15.9 GB unaccounted for, and
 	// /var/lib/docker is root-only" tells somebody exactly where to look.
 	Unreadable []UnreadableDir `json:"unreadable,omitempty"`
+
+	// Refused directories beyond the reported ones. Sent rather than swallowed: a truncated list that
+	// looks complete is how the first version came to present six kilobytes of /etc as the explanation
+	// for fourteen gigabytes.
+	MoreUnreadable int `json:"more_unreadable,omitempty"`
 }
 
 // UnreadableDir is a directory the agent could see but not enter.
@@ -70,7 +75,11 @@ const (
 
 	// The whole scan, not per directory. Held to a few seconds because this runs on somebody's production
 	// server and the disk it is measuring is a disk something else is trying to use.
-	usageBudget = 15 * time.Second
+	// Fifteen seconds was too short in the field: on a 40 GB root with twenty top-level directories each
+	// share was under a second, and the first real scan came back "ran out of time" having never reached
+	// /var. This runs at most hourly, off the sampling path, holds nothing and is cancellable — the cost
+	// of a minute here is far smaller than the cost of an answer that stops before the interesting half.
+	usageBudget = 60 * time.Second
 
 	// How many directories are worth reporting. Past the top few the answer stops being actionable — the
 	// tail of a filesystem is always thousands of small things.
@@ -78,7 +87,14 @@ const (
 
 	// How many refused directories are worth naming. The point is to name the ones somebody recognises —
 	// /var/lib/docker, /root — not to enumerate a tree we were locked out of.
-	maxUnreadableDirs = 8
+	maxUnreadableDirs = 6
+
+	// How many to *collect* before ranking. Collection has to outrun the report, because refusals arrive
+	// in walk order and walk order is alphabetical: on a stock Ubuntu host the first six are /etc/credstore,
+	// /etc/multipath, /etc/polkit-1/rules.d, /etc/ssl/private, /etc/sudoers.d and /lost+found — a few
+	// kilobytes between them — and /var/lib/docker, the twelve gigabytes the whole feature exists to find,
+	// arrives long after the list is full. The first production scan reported exactly that.
+	maxUnreadableCollected = 128
 )
 
 // skipDirs never contain anything worth reporting and can be enormous or infinite.
@@ -202,6 +218,7 @@ func ScanUsage(ctx context.Context, mountPoint string) UsageScan {
 		scan.Partial = true
 	}
 
+	scan.rankUnreadable()
 	scan.Dirs = topDirs(totals, usageTopN)
 
 	// Everything counted, not only what made the top N. The server subtracts this from `statfs` to get
@@ -321,11 +338,16 @@ func (s *UsageScan) walk(overall context.Context, share time.Duration, root, sub
 // "3 directories could not be read" into "/var/lib/docker, owned by root, mode 0710", which is the
 // difference between a warning and somewhere to look.
 //
-// Shallowest-first and capped: a refused tree can contain thousands of equally refused children, and a
-// list of overlay2 hashes is noise. In practice the walk stops at the first refusal on any branch, so
-// this stays short on its own.
+// Shallowest-first: a refused tree can contain thousands of equally refused children, and a list of
+// overlay2 hashes is noise. In practice the walk stops at the first refusal on any branch, so this stays
+// short on its own.
+//
+// Collects generously and ranks later — see {@link rankUnreadable}. Capping here would cap in *walk*
+// order, which is alphabetical, and the directory worth naming is nearly always the last one to arrive.
 func (s *UsageScan) noteUnreadable(path string) {
-	if len(s.Unreadable) >= maxUnreadableDirs {
+	if len(s.Unreadable) >= maxUnreadableCollected {
+		s.MoreUnreadable++
+
 		return
 	}
 
@@ -347,6 +369,39 @@ func (s *UsageScan) noteUnreadable(path string) {
 	}
 
 	s.Unreadable = append(s.Unreadable, dir)
+}
+
+// rankUnreadable keeps the refusals worth naming and counts the rest.
+//
+// A refused directory cannot be sized — that is the whole premise — so "worth naming" cannot mean "the
+// biggest". What it can mean is **the ones we can name in plain language**: `knownKinds` already lists the
+// places data actually accumulates, and a directory matching one of them is both more likely to hold the
+// missing gigabytes and more likely to mean something to the person reading it. "/var/lib/docker — docker
+// images and containers" is somewhere to look. "/etc/polkit-1/rules.d" is four kilobytes of noise standing
+// where the answer should be.
+//
+// Shallower next, among the unrecognised: /opt/containerd says more than /etc/ssl/private, and a directory
+// nearer the mount root is likelier to be a data location than a config fragment. Path order last, so the
+// list is stable between runs — a table that reshuffles reads as movement that is not there.
+func (s *UsageScan) rankUnreadable() {
+	sort.SliceStable(s.Unreadable, func(i, j int) bool {
+		a, b := s.Unreadable[i], s.Unreadable[j]
+
+		if known := kindFor(a.Path) != ""; known != (kindFor(b.Path) != "") {
+			return known
+		}
+
+		if da, db := strings.Count(a.Path, "/"), strings.Count(b.Path, "/"); da != db {
+			return da < db
+		}
+
+		return a.Path < b.Path
+	})
+
+	if len(s.Unreadable) > maxUnreadableDirs {
+		s.MoreUnreadable += len(s.Unreadable) - maxUnreadableDirs
+		s.Unreadable = s.Unreadable[:maxUnreadableDirs]
+	}
 }
 
 // bucketFor is the directory a file's bytes are attributed to: its own, or the ancestor at the depth

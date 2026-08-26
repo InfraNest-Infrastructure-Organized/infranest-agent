@@ -52,7 +52,7 @@ is the first thing documented rather than a debugging flag buried at the bottom.
 | **CPU** | user + system time, as a percentage. Deliberately **not** `100 - idle`, which counts steal (CPU the hypervisor gave another tenant) and iowait — on a shared vCPU those are most of a false alarm, and neither is load this machine can do anything about |
 | **Memory** | used and total, plus swap. "Used" is total minus `MemAvailable`, not minus `MemFree` — counting the page cache as used makes a healthy Linux box look permanently full |
 | **Disk space** | per mount: device, mount point, used, total |
-| **What is filling a disk** | at most hourly, and only for the fullest mount: the largest directories, bounded to a few seconds and to four levels deep. Answers the question the percentage cannot — a disk at 94% is not actionable until you know it is the journal. Directories the agent is not allowed to read are **named**, and the total it did count is sent so the difference from the mount's real usage can be shown as unaccounted for. See [what it cannot see](#what-it-cannot-see) |
+| **What is filling a disk** | at most hourly, and only for the fullest mount: the largest directories, bounded to a minute and to four levels deep. Answers the question the percentage cannot — a disk at 94% is not actionable until you know it is the journal. Directories the agent is not allowed to read are **named**, and the total it did count is sent so the difference from the mount's real usage can be shown as unaccounted for. See [what it cannot see](#what-it-cannot-see) |
 | **Load average** | 1 / 5 / 15 minute |
 | **Uptime** | seconds since boot |
 | **Processes** | the largest few by memory, off by default. Sorted by memory rather than CPU because a CPU share needs two readings per process, which means walking all of `/proc` twice. **Arguments are omitted** — command lines routinely carry credentials, so the executable name is what gets sent unless you ask otherwise |
@@ -232,15 +232,24 @@ prints the refusal to stderr, and exits successfully.
 
 The agent does not pretend otherwise, and does not ask for root to fix it:
 
-- it **names** each directory it was refused, with the owner and mode, so `/var/lib/docker` is something
-  you can see rather than something missing;
+- it **names** the directories it was refused, with owner and mode, so `/var/lib/docker` is something you
+  can see rather than something missing. Ranked, not first-come: refusals arrive in walk order, which is
+  alphabetical, so on a stock Ubuntu host `/etc/credstore`, `/etc/ssl/private`, `/etc/sudoers.d` and
+  `/lost+found` — a few kilobytes between them — arrive long before the twelve gigabytes under
+  `/var/lib/docker`. The ones the agent can name in plain language come first, and anything beyond the
+  reported few is counted rather than dropped;
 - it reports the total it *did* count, and the mount's real usage comes from `statfs`, which needs no
   privilege. The difference is shown as **not accounted for** — so a breakdown covering a quarter of the
   disk says so, instead of presenting that quarter as the whole picture.
 
-If you want the contents counted, grant the agent's user read and execute access to that directory — bear
-in mind that Docker protects the directories *inside* `/var/lib/docker` as well, so the top one alone is
-usually not enough. Nothing here needs the agent to run as root, and nothing here ever will.
+Most of what gets refused is small and dull — `/etc/ssl/private`, `/etc/sudoers.d`, `/lost+found` — and
+those refusals are working as intended. **Do not grant the agent access to them.** It has no business
+reading private keys or sudoers, and a disk breakdown is not a reason to change that.
+
+If a *data* directory is the one being missed and you want its contents counted, grant the agent's user
+read and execute access to that directory — bearing in mind that Docker protects the directories *inside*
+`/var/lib/docker` as well, so the top one alone is usually not enough. Nothing here needs the agent to run
+as root, and nothing here ever will.
 
 ```
 User=infranest-agent
