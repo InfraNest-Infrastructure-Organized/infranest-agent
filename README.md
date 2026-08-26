@@ -98,25 +98,23 @@ absent there, and are left absent rather than approximated:
 
 ## Install
 
-> **Not yet.** There is no release to download, so the one-liners below do not work today. Everything
-> else on this page is real and you can try it now — build from source and run `print`. This note goes
-> when the first release does.
-
 You need a **token** first. In InfraNest, open the server you want to monitor, go to its **Metrics** tab
 and choose **Install agent**. It gives you a line to copy that already has the token in it.
 
 ### Linux
 
 ```sh
-curl -fsSL https://get.infranest.app/agent.sh | sudo sh -s -- --token sat_YOUR_TOKEN
+curl -fsSL https://github.com/InfraNest-Infrastructure-Organized/infranest-agent/releases/latest/download/install.sh \
+  | sudo sh -s -- --token sat_YOUR_TOKEN
 ```
 
 Prefer not to pipe a script into a shell? That is a reasonable position — download it, read it, then run it:
 
 ```sh
-curl -fsSLO https://get.infranest.app/agent.sh
-less agent.sh                       # it is about 200 lines
-sudo sh agent.sh --token sat_YOUR_TOKEN
+curl -fsSLO https://github.com/InfraNest-Infrastructure-Organized/infranest-agent/releases/latest/download/install.sh
+sha256sum install.sh                # compare with the checksum InfraNest shows beside the command
+less install.sh                     # it is about 200 lines
+sudo sh install.sh --token sat_YOUR_TOKEN
 ```
 
 ### Windows
@@ -124,8 +122,9 @@ sudo sh agent.sh --token sat_YOUR_TOKEN
 In PowerShell, **as administrator**:
 
 ```powershell
-irm https://get.infranest.app/agent.ps1 -OutFile agent.ps1
-.\agent.ps1 -Token sat_YOUR_TOKEN
+irm https://github.com/InfraNest-Infrastructure-Organized/infranest-agent/releases/latest/download/install.ps1 -OutFile install.ps1
+Get-FileHash install.ps1 -Algorithm SHA256   # compare with the checksum InfraNest shows
+.\install.ps1 -Token sat_YOUR_TOKEN
 ```
 
 ### Verifying a release before you install it
@@ -175,8 +174,8 @@ sudo infranest-agent status    # what is being collected, and when the last send
 Completely, leaving nothing behind:
 
 ```sh
-sudo sh agent.sh --uninstall          # Linux
-.\agent.ps1 -Uninstall                # Windows
+sudo sh install.sh --uninstall        # Linux
+.\install.ps1 -Uninstall              # Windows
 ```
 
 ### Keeping the token out of your shell history
@@ -185,7 +184,7 @@ The token is a credential, and a command line ends up in `~/.bash_history` and i
 runs. On a shared machine, put it in a file instead:
 
 ```sh
-sudo sh agent.sh --token-file /root/token && shred -u /root/token
+sudo sh install.sh --token-file /root/token && shred -u /root/token
 ```
 
 ### Building it yourself
