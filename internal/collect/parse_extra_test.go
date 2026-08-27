@@ -238,3 +238,54 @@ func TestSplitNulUTF16HandlesAnEmptyBlock(t *testing.T) {
 		t.Errorf("got %q, want none", got)
 	}
 }
+
+// A process whose name contains a parenthesis puts every field after the comm out by one.
+//
+// Not a contrivance: `(sd-pam)` is on every systemd machine, and a program launched from a path with
+// brackets in it lands here too. Counting fields from the start of the line is the obvious way to parse
+// this file and it is wrong on exactly the machines least like a test one.
+func TestProcTimesAreReadAfterTheCommNotFromTheStart(t *testing.T) {
+	// pid 1681, comm "ruby (2)", state S, then the documented fields. utime=fields[11]=120,
+	// stime=fields[12]=30, starttime=fields[19]=99000.
+	line := "1681 (ruby (2)) S 1 1681 1681 0 -1 4194304 100 200 0 0 120 30 0 0 20 0 5 0 99000 1234 5678"
+
+	got, err := parseProcTimes(line)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if got.CPUTicks != 150 {
+		t.Fatalf("CPUTicks = %d, want 150 (utime 120 + stime 30)", got.CPUTicks)
+	}
+	if got.StartTicks != 99000 {
+		t.Fatalf("StartTicks = %d, want 99000", got.StartTicks)
+	}
+}
+
+func TestBootTimeIsReadFromProcStat(t *testing.T) {
+	// A process's start time is recorded relative to boot, so without this the page can say a process has
+	// been running three days but not since when — and "since when" is the half that lines up with
+	// everything else on screen.
+	stat := "cpu  1 2 3\nintr 99\nbtime 1756000000\nprocesses 1234\n"
+
+	got, err := parseBootTime(stat)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if got != 1756000000 {
+		t.Fatalf("btime = %d", got)
+	}
+}
+
+func TestAMissingBootTimeIsAnErrorNotAZero(t *testing.T) {
+	// Zero would put every process's start at January 1970 — a date, which is believed in a way a dash
+	// is not.
+	if _, err := parseBootTime("cpu 1 2 3\nprocesses 4\n"); err == nil {
+		t.Fatal("a /proc/stat with no btime was accepted")
+	}
+}
+
+func TestATruncatedStatLineIsRefused(t *testing.T) {
+	if _, err := parseProcTimes("1 (init) S 1 1 1"); err == nil {
+		t.Fatal("a stat line with too few fields was accepted")
+	}
+}
