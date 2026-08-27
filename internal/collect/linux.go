@@ -337,9 +337,26 @@ func readProcesses(opts Options) ([]Process, error) {
 			}
 
 			now, err := parseProcTimes(string(statBytes))
-			if err != nil || now.CPUTicks < was.CPUTicks {
-				// Counters that went backwards mean the pid was reused by a different process between
-				// the two reads. Reporting the difference would attribute one program's work to another.
+			if err != nil {
+				continue
+			}
+
+			// A different process wearing the same pid, told by its start time.
+			//
+			// The obvious check is whether the counter went backwards, and it catches only half of it: a
+			// reused pid that has done *less* work than the one it replaced. The other half is worse and
+			// silent — a short-lived process exits, the pid is reused by something busy, and its whole
+			// CPU burn is reported under the old process's name, clamped to a plausible-looking 100%.
+			//
+			// `starttime` is the discriminator, it is in the same line we already parse, and it is exact:
+			// two processes with one pid cannot have started at the same tick.
+			if now.StartTicks != was.StartTicks {
+				continue
+			}
+			if now.CPUTicks < was.CPUTicks {
+				// Belt and braces. With the start times equal this is the same process, so a counter
+				// going backwards is something we do not understand — and a negative share rendered as a
+				// percentage is worse than an absent one.
 				continue
 			}
 

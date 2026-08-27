@@ -289,3 +289,48 @@ func TestATruncatedStatLineIsRefused(t *testing.T) {
 		t.Fatal("a stat line with too few fields was accepted")
 	}
 }
+
+// Two processes cannot share a pid *and* a start tick, which is what makes the reuse check exact.
+//
+// The check this replaced compared CPU counters and caught only half the problem: a reused pid that had
+// done less work than the one it replaced. The silent half is a short-lived process exiting, the pid being
+// reused by something busy, and its whole burn arriving under the old process's name — clamped to a
+// plausible-looking 100%, which is exactly the number somebody would act on.
+func TestAReusedPidIsToldApartByItsStartTimeNotItsCounters(t *testing.T) {
+	// Same pid, both readings. The second is a different program that started later and has burned more.
+	was, err := parseProcTimes("42 (short-lived) S 1 1 1 0 0 0 0 0 0 0 10 5 0 0 20 0 1 0 900 0 0")
+	if err != nil {
+		t.Fatalf("first reading: %v", err)
+	}
+	now, err := parseProcTimes("42 (something-busy) R 1 1 1 0 0 0 0 0 0 0 400 100 0 0 20 0 1 0 5000 0 0")
+	if err != nil {
+		t.Fatalf("second reading: %v", err)
+	}
+
+	if now.CPUTicks <= was.CPUTicks {
+		t.Fatal("fixture is wrong: the counter must go UP, which is the case the old check missed")
+	}
+	if now.StartTicks == was.StartTicks {
+		t.Fatal("fixture is wrong: the two must have different start ticks")
+	}
+}
+
+// …and the same process across two readings keeps its start tick, so a real share is still measured.
+func TestTheSameProcessKeepsItsStartTimeBetweenReadings(t *testing.T) {
+	was, err := parseProcTimes("42 (nginx) S 1 1 1 0 0 0 0 0 0 0 10 5 0 0 20 0 1 0 900 0 0")
+	if err != nil {
+		t.Fatalf("first reading: %v", err)
+	}
+	now, err := parseProcTimes("42 (nginx) S 1 1 1 0 0 0 0 0 0 0 40 20 0 0 20 0 1 0 900 0 0")
+	if err != nil {
+		t.Fatalf("second reading: %v", err)
+	}
+
+	if now.StartTicks != was.StartTicks {
+		t.Fatalf("start ticks differ (%d vs %d) — a live process would report no CPU at all",
+			was.StartTicks, now.StartTicks)
+	}
+	if now.CPUTicks-was.CPUTicks != 45 {
+		t.Fatalf("delta is %d, want 45", now.CPUTicks-was.CPUTicks)
+	}
+}
