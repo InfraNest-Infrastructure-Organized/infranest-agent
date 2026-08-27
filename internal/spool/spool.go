@@ -65,7 +65,35 @@ func New(dir string) (*Spool, error) {
 		return nil, fmt.Errorf("cannot create the spool directory %s: %w", dir, err)
 	}
 
-	return &Spool{dir: dir, Max: DefaultMax}, nil
+	sp := &Spool{dir: dir, Max: DefaultMax}
+	sp.sweepPartials()
+
+	return sp, nil
+}
+
+// sweepPartials removes half-written readings left by a previous run.
+//
+// A reading is written to `<seq>.json.tmp` and renamed into place, so a `.tmp` is by definition one that
+// never committed. Nothing else collects them: `names()` filters to `.json`, so `trim()` neither counts
+// nor deletes one and the spool's own bound does not apply to them.
+//
+// Startup rather than on failure, because the case that matters is the one no error path sees — a process
+// killed mid-write leaves a file behind with nobody left to clean it up, and the OOM killer visiting an
+// agent on a struggling machine is not an exotic scenario. Safe here specifically: nothing is in flight
+// before the spool exists.
+//
+// Best effort throughout. A spool directory we cannot read is a problem for `Add` to report; failing to
+// construct over an orphan would turn a stray file into no monitoring at all.
+func (s *Spool) sweepPartials() {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".tmp") {
+			_ = os.Remove(filepath.Join(s.dir, e.Name()))
+		}
+	}
 }
 
 // Entry is one spooled reading: the bytes as they will be sent, and where they came from.
@@ -91,6 +119,13 @@ func (s *Spool) Add(seq int64, payload any) error {
 	tmp := filepath.Join(s.dir, name+".tmp")
 
 	if err := os.WriteFile(tmp, body, 0o600); err != nil {
+		// Removed here too, not only on a failed rename. A partial write leaves a `.tmp` that nothing
+		// ever collects: `names()` filters to `.json`, so `trim()` neither counts nor deletes it and the
+		// spool's own bound does not apply. The trigger is a full disk, which is exactly when an
+		// unbounded pile of orphans is least affordable — and each one has a distinct name, because the
+		// sequence has already moved on.
+		_ = os.Remove(tmp)
+
 		return fmt.Errorf("cannot write the reading: %w", err)
 	}
 	// Rename is what makes a reading appear all at once. A reader that catches a half-written file would

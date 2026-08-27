@@ -402,6 +402,20 @@ func (s *UsageScan) rankUnreadable() {
 		s.MoreUnreadable += len(s.Unreadable) - maxUnreadableDirs
 		s.Unreadable = s.Unreadable[:maxUnreadableDirs]
 	}
+
+	// Clipped here and not where these are collected, because everything upstream needs the whole path:
+	// the ancestor check dedupes by prefix, and the ranking above reads the kind and the depth off it.
+	// Truncating earlier would silently stop all three working on exactly the long paths this protects.
+	//
+	// It has to happen somewhere. A path over the ingest's limit does not cost this row — it fails
+	// validation for the *whole push*, and a rejected push carries no per-reading verdict, so the batch
+	// never settles, stays at the head of the spool, and is offered again for ever with every later
+	// reading queued behind it. The directory list beside this one was clipped for that reason from the
+	// start; this one was not, and four levels of ordinary cache-tree names clears 512 bytes without
+	// anything unusual. A directory we were refused is exactly the kind that is deep and long.
+	for i := range s.Unreadable {
+		s.Unreadable[i].Path = clip(s.Unreadable[i].Path, maxUsagePath)
+	}
 }
 
 // bucketFor is the directory a file's bytes are attributed to: its own, or the ancestor at the depth
