@@ -83,6 +83,32 @@ type Service struct {
 	// twenty workers is twenty rows there and one number here. Absent where systemd has no accounting for
 	// the unit — see dbus.MemoryUnknown, which is `(uint64) -1` and reads as sixteen exabytes if believed.
 	MemoryBytes *uint64 `json:"memory_bytes,omitempty"`
+
+	// Why the unit last finished the way it did (#887), straight from systemd: "exit-code", "signal",
+	// "oom-kill", "timeout", "watchdog", "start-limit-hit", "core-dump", "resources", "protocol",
+	// "success".
+	//
+	// This is the answer to "why did it fail" that does not require shipping the unit's log output to us.
+	// A journal excerpt would carry whatever the service printed — connection strings, tokens, a password
+	// in an argv — and would need a size cap, a redaction pass and a decision about storing somebody's
+	// secrets in our database. This needs none of them: it is a word systemd chose from a fixed list.
+	//
+	// It is also the better answer for the common case. "Killed by the OOM killer" is the same fact every
+	// time, so it can be filtered, alerted on and translated; a log excerpt saying the same thing is prose
+	// that a human has to read and no rule can act on.
+	//
+	// Fetched only for units that have failed, like the timestamp beside it.
+	Result string `json:"result,omitempty"`
+
+	// How the main process ended, and with what — a POSIX `si_code` (1 exited, 2 killed, 3 dumped) and the
+	// exit status or signal number that went with it.
+	//
+	// A pair, because neither means anything alone: status 0 is a clean exit if the code says exited, and
+	// is not a status at all if the process was killed, where the field carries the signal number. Absent
+	// together when systemd has no record of a main process ending — which is a different thing from
+	// exiting with zero, and would otherwise read as success.
+	ExecMainCode   *int32 `json:"exec_main_code,omitempty"`
+	ExecMainStatus *int32 `json:"exec_main_status,omitempty"`
 }
 
 // Process is one of the busiest few. Command carries no arguments unless the operator turned them on:

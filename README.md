@@ -56,7 +56,7 @@ is the first thing documented rather than a debugging flag buried at the bottom.
 | **Load average** | 1 / 5 / 15 minute |
 | **Uptime** | seconds since boot |
 | **Processes** | the largest few by memory, off by default, each with its CPU share and when it started. Ranked by memory rather than CPU because ranking by CPU would need two readings of *every* process; the share is measured for the reported few only, which is ten extra file reads rather than a second walk of all of `/proc`. **Arguments are omitted** — command lines routinely carry credentials, so the executable name is what gets sent unless you ask otherwise |
-| **Services** | systemd units that were set up to run, which of them have failed, **how many times each has been restarted**, and what each is using in memory. Watched set is "enabled, plus anything currently failed", so it works with no configuration. Read over D-Bus; nothing here can start, stop or restart a unit |
+| **Services** | systemd units that were set up to run, which of them have failed, **why each failed**, **how many times each has been restarted**, and what each is using in memory. Watched set is "enabled, plus anything currently failed", so it works with no configuration. Read over D-Bus; nothing here can start, stop or restart a unit. The failure reason is systemd's own word for it — `oom-kill`, `timeout`, `exit-code` and the rest — and **no log output is sent**: see [what it cannot see](#what-it-cannot-see) |
 
 A failed unit is worth its own line here because it is the failure that moves no number: a backup timer
 that died leaves CPU, memory, disk and load exactly where they were, and the machine looks perfectly
@@ -249,6 +249,19 @@ If a *data* directory is the one being missed and you want its contents counted,
 read and execute access to that directory — bearing in mind that Docker protects the directories *inside*
 `/var/lib/docker` as well, so the top one alone is usually not enough. Nothing here needs the agent to run
 as root, and nothing here ever will.
+
+There is a second thing it cannot see, and this one is deliberate rather than a consequence of privilege:
+**it sends no log output.** When a unit fails you get systemd's own word for why — `oom-kill`, `timeout`,
+`exit-code`, `start-limit-hit` — and the exit status that went with it, but never a line the service
+printed.
+
+That is not a limitation waiting to be lifted. Service logs routinely carry credentials: a connection
+string in a startup error, a token in a failed request, a password that ended up in an argv. Shipping them
+here would mean choosing a truncation that cuts the line that mattered, writing a redaction pass that
+cannot know what a secret looks like in an arbitrary program's output, and storing the remainder in a
+database. The failure reason answers the question that log line was going to be read for, in a form a rule
+can act on and a person can read in any language, and it cannot leak anything, because it is one word from
+a list systemd chose from.
 
 ```
 User=infranest-agent
