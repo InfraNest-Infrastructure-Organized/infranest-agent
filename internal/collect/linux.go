@@ -4,6 +4,7 @@ package collect
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"syscall"
@@ -250,6 +251,18 @@ func readProcesses(opts Options) ([]Process, error) {
 	pageSize := int64(os.Getpagesize())
 	procs := make([]Process, 0, 64)
 
+	// Read once for the whole walk, not per process.
+	bootedAt := int64(0)
+	if body, err := os.ReadFile("/proc/stat"); err == nil {
+		if btime, err := parseBootTime(string(body)); err == nil {
+			bootedAt = btime
+		}
+	}
+
+	// CPU ticks as of this pass, kept for every process because the ones worth a second look are not
+	// known until the whole list has been sorted.
+	first := make(map[int]procTimes, 64)
+
 	for _, entry := range entries {
 		pid, err := atoiStrict(entry.Name())
 		if err != nil {
@@ -272,6 +285,18 @@ func readProcesses(opts Options) ([]Process, error) {
 			p.MemoryBytes = i64(rss)
 		}
 
+		if times, err := parseProcTimes(string(statBytes)); err == nil {
+			first[pid] = times
+
+			// When the machine booted plus how long after boot this process started. Absent rather than
+			// wrong when /proc/stat could not be read: a start time computed from a boot time we do not
+			// have would be an arbitrary date, and a date is believed in a way a dash is not.
+			if bootedAt > 0 {
+				at := time.Unix(bootedAt+int64(times.StartTicks)/userHz, 0).UTC()
+				p.StartedAt = &at
+			}
+		}
+
 		if opts.ProcessArgs {
 			if args, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid)); err == nil {
 				if full := strings.TrimSpace(strings.ReplaceAll(string(args), "\x00", " ")); full != "" {
@@ -287,7 +312,64 @@ func readProcesses(opts Options) ([]Process, error) {
 		procs = append(procs, p)
 	}
 
-	return topByMemory(procs, opts.MaxProcesses), nil
+	top := topByMemory(procs, opts.MaxProcesses)
+
+	// A CPU share is a difference between two readings, and the second reading is taken for the **top few
+	// only**. Re-walking all of /proc — three hundred directories on a busy machine — is what made this
+	// column not worth having; ten more file reads is not.
+	//
+	// Skipped when there is no interval to measure over. A share computed across zero time is a division
+	// by zero dressed up as a measurement.
+	if opts.CPUInterval > 0 && len(top) > 0 {
+		time.Sleep(opts.CPUInterval)
+
+		ticksPerInterval := opts.CPUInterval.Seconds() * userHz
+
+		for i := range top {
+			was, ok := first[top[i].PID]
+			if !ok {
+				continue
+			}
+
+			statBytes, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", top[i].PID))
+			if err != nil {
+				continue // exited while we waited; entirely normal, and it has no share to report
+			}
+
+			now, err := parseProcTimes(string(statBytes))
+			if err != nil {
+				continue
+			}
+
+			// A different process wearing the same pid, told by its start time.
+			//
+			// The obvious check is whether the counter went backwards, and it catches only half of it: a
+			// reused pid that has done *less* work than the one it replaced. The other half is worse and
+			// silent — a short-lived process exits, the pid is reused by something busy, and its whole
+			// CPU burn is reported under the old process's name, clamped to a plausible-looking 100%.
+			//
+			// `starttime` is the discriminator, it is in the same line we already parse, and it is exact:
+			// two processes with one pid cannot have started at the same tick.
+			if now.StartTicks != was.StartTicks {
+				continue
+			}
+			if now.CPUTicks < was.CPUTicks {
+				// Belt and braces. With the start times equal this is the same process, so a counter
+				// going backwards is something we do not understand — and a negative share rendered as a
+				// percentage is worse than an absent one.
+				continue
+			}
+
+			pct := float64(now.CPUTicks-was.CPUTicks) / ticksPerInterval * 100
+
+			// Clamped, not because a process cannot exceed one core — a threaded one routinely does —
+			// but because the field is a percentage the server validates as 0-100, and a push carrying
+			// 340 fails validation for the *whole batch*.
+			top[i].CPUPercent = f64(math.Min(pct, 100))
+		}
+	}
+
+	return top, nil
 }
 
 func readRSS(pid int, pageSize int64) (int64, error) {

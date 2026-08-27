@@ -130,6 +130,82 @@ func parseProcComm(stat string) (string, error) {
 	return comm, nil
 }
 
+// USER_HZ is the unit /proc reports process times in.
+//
+// Fixed at 100 by the kernel ABI regardless of the compiled-in CONFIG_HZ — `starttime`, `utime` and
+// `stime` are all scaled to it before userspace sees them. The proper way to ask is `sysconf(_SC_CLK_TCK)`,
+// which needs cgo; this agent has none by design, and the constant has not moved in the lifetime of the
+// interface.
+const userHz = 100
+
+// procTimes are the fields of /proc/<pid>/stat this agent reads after the comm.
+//
+// Parsed from *after* the last ')' rather than by splitting the whole line: a process can be called
+// `(my program) (2)` and the comm field is not escaped, so counting fields from the start puts every
+// later index one or more places out. That is a bug that only appears on the machines least like a test
+// one.
+type procTimes struct {
+	// Ticks of CPU this process has used in user and kernel mode, added together. The difference between
+	// two readings over a known interval is the share of a core it was using.
+	CPUTicks uint64
+	// Ticks between boot and this process starting.
+	StartTicks uint64
+}
+
+// parseProcTimes reads the CPU and start-time fields out of a /proc/<pid>/stat line.
+//
+// Field numbers are the ones proc(5) documents, counting the comm as field 2: utime is 14, stime is 15
+// and starttime is 22. After the closing parenthesis the first field is number 3, so the offsets below
+// are those numbers minus three.
+func parseProcTimes(stat string) (procTimes, error) {
+	closeIdx := strings.LastIndexByte(stat, ')')
+	if closeIdx < 0 {
+		return procTimes{}, fmt.Errorf("no comm field")
+	}
+
+	fields := strings.Fields(stat[closeIdx+1:])
+	if len(fields) < 20 {
+		return procTimes{}, fmt.Errorf("expected at least 20 fields after comm, got %d", len(fields))
+	}
+
+	utime, err := strconv.ParseUint(fields[11], 10, 64)
+	if err != nil {
+		return procTimes{}, fmt.Errorf("utime: %w", err)
+	}
+	stime, err := strconv.ParseUint(fields[12], 10, 64)
+	if err != nil {
+		return procTimes{}, fmt.Errorf("stime: %w", err)
+	}
+	start, err := strconv.ParseUint(fields[19], 10, 64)
+	if err != nil {
+		return procTimes{}, fmt.Errorf("starttime: %w", err)
+	}
+
+	return procTimes{CPUTicks: utime + stime, StartTicks: start}, nil
+}
+
+// parseBootTime reads `btime` — the wall-clock second the machine booted — from /proc/stat.
+//
+// Needed because a process's start time is recorded relative to boot, not to the epoch. Without it the
+// page can say a process has been running for three days but not since when, and "since when" is the half
+// that lines up with everything else on the screen.
+func parseBootTime(stat string) (int64, error) {
+	for _, line := range strings.Split(stat, "\n") {
+		if !strings.HasPrefix(line, "btime ") {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			return 0, fmt.Errorf("btime has no value")
+		}
+
+		return strconv.ParseInt(fields[1], 10, 64)
+	}
+
+	return 0, fmt.Errorf("no btime line")
+}
+
 // parseStatmRSS reads resident set size, in bytes, from /proc/<pid>/statm.
 func parseStatmRSS(statm string, pageSize int64) (int64, error) {
 	fields := strings.Fields(statm)
