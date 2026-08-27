@@ -17,7 +17,7 @@ long as anyone is running the old one.
 | Version | Added |
 |---|---|
 | 4 | `services[].result`, `services[].exec_main_code` and `services[].exec_main_status` — why a failed unit failed, without its log output |
-| 3 | `services[].restarts`, `services[].memory_bytes`, and `state_changed_at` on every unit rather than only the failed ones |
+| 3 | `services[].restarts`, `services[].memory_bytes`, `state_changed_at` on every unit rather than only the failed ones, and `processes[].cpu_percent` / `processes[].started_at` actually being sent |
 | 2 | `disk_usage.accounted_bytes`, `disk_usage.unreadable[]`, `disk_usage.more_unreadable`, the `too_frequent` skip reason, `min_interval_seconds` in the response, and the 8 MB body limit stated with the rule that snapshots ride the newest sample only |
 | 1 | The batch envelope, samples, mounts, processes, services, system facts, `disk_usage` |
 
@@ -76,7 +76,10 @@ nothing rather than a guess.
 | `mounts[].used_bytes` / `total_bytes` | int | **No percentage.** The server computes it, so a percentage cannot disagree with its own bytes — which is what an alert would then fail to fire on |
 | `processes[]` | array | Max 32 |
 | `processes[].command` | string ≤255 | Executable name by default. Full command lines carry credentials often enough that shipping them must be asked for |
-| `processes[].cpu_percent`, `memory_bytes`, `pid`, `started_at` | | |
+| `processes[].memory_bytes` | int ≥0 | Resident set size. What the list is ranked by |
+| `processes[].cpu_percent` | 0–100 | Share of one core over the sampling interval, measured for the reported few only. **Clamped at 100**: a threaded process genuinely exceeds one core, and the endpoint validates this field as a percentage — a push carrying 340 fails validation for the whole batch |
+| `processes[].pid` | int ≥0 | |
+| `processes[].started_at` | RFC3339 | When the process started, from the machine's boot time plus its start offset. Absent rather than wrong where boot time could not be read: a date computed from a boot time we do not have is believed in a way an absent field is not |
 | `services[]` | array | Max 200 |
 | `services[].unit` | string ≤255 | |
 | `services[].description` | string ≤255 | |
