@@ -220,6 +220,12 @@ Run it as the `infranest-agent` user, with `/etc/infranest/agent.conf` in its en
 A dedicated unprivileged system user under a hardened systemd unit. It does not run as root: CPU, memory,
 load, network and mount usage are all readable without it.
 
+**The installer writes that unit itself**, from a copy embedded in the script — it is not downloaded, and
+there is no fallback that reads one from disk. The unit is where every restriction lives (`User=`,
+`NoNewPrivileges`, an empty capability set, `ProtectSystem=strict`, a syscall filter), so it is the last
+file that should come from anywhere unverified. CI fails if the embedded copy drifts from
+[`packaging/infranest-agent.service`](packaging/infranest-agent.service), which stays the readable one.
+
 ### What it cannot see
 
 Running unprivileged has one visible cost, and it is in the "what is filling this disk" breakdown.
