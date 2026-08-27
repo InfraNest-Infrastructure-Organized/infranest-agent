@@ -16,8 +16,8 @@ long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
-| 3 | `services[].restarts`, `services[].memory_bytes`, and `state_changed_at` on every unit rather than only the failed ones |
 | 4 | `services[].result`, `services[].exec_main_code` and `services[].exec_main_status` — why a failed unit failed, without its log output |
+| 3 | `services[].restarts`, `services[].memory_bytes`, and `state_changed_at` on every unit rather than only the failed ones |
 | 2 | `disk_usage.accounted_bytes`, `disk_usage.unreadable[]`, `disk_usage.more_unreadable`, the `too_frequent` skip reason, `min_interval_seconds` in the response, and the 8 MB body limit stated with the rule that snapshots ride the newest sample only |
 | 1 | The batch envelope, samples, mounts, processes, services, system facts, `disk_usage` |
 
