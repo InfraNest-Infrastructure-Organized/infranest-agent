@@ -95,6 +95,24 @@ jobs:
           done
           exit $fail
 
+      # The installer writes the systemd unit itself, because the version it used to fetch was the one
+      # file it did not verify — and its fallback read from the current directory, which under
+      # `curl | sh` is wherever the admin happened to be standing. Embedding removes that, and this is
+      # what stops the embedded copy drifting from the one people read in the repository.
+      - name: The unit the installer writes is the unit in packaging/
+        run: |
+          sed -n '/<<.INFRANEST_UNIT_EOF./,/^INFRANEST_UNIT_EOF$/p' install.sh \
+            | sed '1d;$d' > /tmp/embedded.service
+          if ! diff -u packaging/infranest-agent.service /tmp/embedded.service; then
+            echo "::error::install.sh embeds a different unit than packaging/infranest-agent.service."
+            exit 1
+          fi
+          # A unit with no User= runs as root. Cheap to assert, and the whole point of the file.
+          grep -qx 'User=infranest-agent' /tmp/embedded.service \
+            || { echo "::error::the embedded unit has no User= line"; exit 1; }
+          grep -qx 'NoNewPrivileges=yes' /tmp/embedded.service \
+            || { echo "::error::the embedded unit lost NoNewPrivileges"; exit 1; }
+
       # `net` and `net/http` are legitimately needed to *make* a request, so their presence proves nothing
       # either way. What must never appear is the act of binding a socket.
       - name: The agent opens no listening socket

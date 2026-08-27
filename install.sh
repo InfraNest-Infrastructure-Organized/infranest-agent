@@ -214,14 +214,114 @@ log "wrote ${CONF_DIR}/agent.conf (0600, ${USER_NAME} only)"
 # ── The service ──────────────────────────────────────────────────────────────────────────────────────
 if command -v systemctl >/dev/null 2>&1; then
   log "installing the systemd service"
-  # The unit that matches this binary, not whatever is on main — otherwise `--version v1.0.0` pairs an
-  # old agent with a newer unit, and a rollback rolls back only half of the install.
-  unit_ref="main"
-  [ "$VERSION" = "latest" ] || unit_ref="$VERSION"
-  curl -fsSL "https://raw.githubusercontent.com/${REPO}/${unit_ref}/packaging/infranest-agent.service" \
-    -o "/etc/systemd/system/${SERVICE}.service" 2>/dev/null \
-    || cp "$(dirname "$0")/packaging/infranest-agent.service" "/etc/systemd/system/${SERVICE}.service" 2>/dev/null \
-    || die "could not install the service file"
+  # Written from here, not fetched, and with no fallback.
+  #
+  # This unit is where every security control lives: `User=`, `NoNewPrivileges`, an empty
+  # `CapabilityBoundingSet`, `ProtectSystem=strict`, a syscall filter. It was the one file the installer
+  # did not verify — the binary is checksummed and this was not — and it was fetched from a *different*
+  # host than the binary (`raw.githubusercontent.com` rather than the release CDN), so it could fail on
+  # its own. Corporate proxies block that host routinely while allowing releases.
+  #
+  # On failure it fell back to `cp "$(dirname "$0")/packaging/..."`. Under `curl | sh` — the documented
+  # way to run this — `$0` is `sh`, so `dirname` is `.`: the *current directory*. An admin who ran the
+  # installer from /tmp would take a systemd unit from a world-writable path, and the next two lines are
+  # `daemon-reload` and `enable --now`. A unit with no `User=` runs as root. That is a local privilege
+  # escalation reachable by a network hiccup and a `cd`.
+  #
+  # Embedding it removes the second network dependency and the fallback together, and pins the unit to
+  # the installer that wrote it. The copy under packaging/ stays the source of truth for people reading
+  # the repository; CI fails if the two drift.
+  cat > "/etc/systemd/system/${SERVICE}.service" <<'INFRANEST_UNIT_EOF' || die "could not write the service file"
+[Unit]
+Description=InfraNest monitoring agent
+Documentation=https://github.com/InfraNest-Infrastructure-Organized/infranest-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/infranest-agent run
+EnvironmentFile=/etc/infranest/agent.conf
+Restart=on-failure
+RestartSec=15s
+
+# Runs as nobody in particular. CPU, memory, load, mount usage and process names are all readable without
+# privilege, so there is nothing here that needs root — and an agent that needed it would be a much harder
+# thing to ask anyone to install.
+User=infranest-agent
+Group=infranest-agent
+
+# It cannot gain privilege, hold a capability, or become anything else.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+# It cannot write to the filesystem, read anyone's home directory, or see other users' processes.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# ProtectProc is deliberately NOT `invisible`. That hides other users' /proc entries from this process,
+# which would leave the process collector able to see only the agent itself — a feature quietly reduced to
+# nothing by a hardening directive that looks obviously correct. `default` keeps the kernel's own rules,
+# which already stop an unprivileged agent reading anything sensitive.
+ProtectProc=default
+ProcSubset=all
+ReadWritePaths=/var/lib/infranest-agent
+
+# It cannot touch the kernel, and cannot load anything.
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+
+# IP for sending, and unix sockets for one thing: asking systemd what it was told to run (#774).
+#
+# AF_UNIX is here because there is no other way to read a unit's state. There is no file that says a unit
+# has failed — /run/systemd distinguishes running from not-running, not failed from deliberately stopped —
+# and `systemctl` would not avoid this socket, only reach it through a subprocess, which is the thing this
+# agent does not do.
+#
+# What it does not permit is worth stating, because the obvious worry is the wrong one. The agent cannot
+# start, stop, restart or kill a unit, and not because it chooses not to: those calls are gated behind
+# polkit's org.freedesktop.systemd1.manage-units, which requires an authenticated administrator. This
+# service has no login session and no way to become one, and on a machine without polkit systemd allows
+# uid 0 only. The read-only property is the operating system's, not a promise about our code — though CI
+# fails the build if a unit-control method name ever appears in the source, because an invariant nobody
+# checks is an invariant that erodes.
+#
+# Verified on Ubuntu 24.04 / systemd 255, under exactly these settings:
+#
+#   systemd-run --uid=nobody -p ProtectSystem=strict \
+#     -p "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX" systemctl list-units --failed
+#
+# lists units, and the same command without AF_UNIX fails with "Address family not supported by
+# protocol". So ProtectSystem=strict does not block connecting to a unix socket — it is a permission
+# check on the inode rather than a write — and AF_UNIX is precisely and only what this needs. Worth
+# recording because the interaction is not obvious and the failure mode is a collector that silently
+# reports nothing.
+#
+# Set INFRANEST_SERVICES=0 in /etc/infranest/agent.conf to turn the collector off; the socket is then
+# never opened.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+
+# It cannot become the reason this server falls over. That is the one failure a monitoring agent must not
+# have, so the limits are set here rather than trusted to the program.
+MemoryMax=64M
+CPUQuota=5%
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target
+INFRANEST_UNIT_EOF
 
   systemctl daemon-reload
 
