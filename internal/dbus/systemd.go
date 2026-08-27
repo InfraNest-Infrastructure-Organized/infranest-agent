@@ -160,6 +160,101 @@ func (c *Conn) unitPropertyUint64(unitPath, iface, name string) (uint64, error) 
 	}
 }
 
+// unitPropertyString reads one string property off a unit.
+//
+// Separate from the numeric reader because the variant's inner type decides how the body is decoded, and
+// a string is not a width of a number. Same shape otherwise: the caller names the interface, because a
+// `.service` property asked of a `.timer` is an error rather than an empty answer.
+func (c *Conn) unitPropertyString(unitPath, iface, name string) (string, error) {
+	body, signature, err := c.Call(managerDestination, unitPath, propertiesGet, "Get", "ss", iface, name)
+	if err != nil {
+		return "", err
+	}
+	if signature != "v" {
+		return "", fmt.Errorf("Properties.Get answered %q, expected \"v\"", signature)
+	}
+
+	return decodeVariantString(body, name)
+}
+
+// decodeVariantString pulls a string out of a `Properties.Get` reply body.
+//
+// Split from the call so the signature check has a test. The check is the whole point of it: a property
+// that answers with a different type than expected must be an error, not a value read at the wrong offset
+// — that path returns something rather than nothing, which is the failure that gets believed.
+func decodeVariantString(body []byte, name string) (string, error) {
+	d := &decoder{buf: body}
+	if inner := d.signature(); inner != "s" {
+		return "", fmt.Errorf("%s is %q, expected a string", name, inner)
+	}
+	value := d.str()
+
+	return value, d.err
+}
+
+// unitPropertyInt32 reads one signed 32-bit property off a unit.
+//
+// `ExecMainStatus` and `ExecMainCode` are both `i`. On the wire that is the same four bytes as a `u` —
+// D-Bus does not distinguish them in layout, only in signature — so the existing uint32 reader does the
+// decoding and the conversion happens here, where the signature has been checked.
+func (c *Conn) unitPropertyInt32(unitPath, iface, name string) (int32, error) {
+	body, signature, err := c.Call(managerDestination, unitPath, propertiesGet, "Get", "ss", iface, name)
+	if err != nil {
+		return 0, err
+	}
+	if signature != "v" {
+		return 0, fmt.Errorf("Properties.Get answered %q, expected \"v\"", signature)
+	}
+
+	return decodeVariantInt32(body, name)
+}
+
+// decodeVariantInt32 pulls a signed 32-bit value out of a `Properties.Get` reply body.
+//
+// The conversion is where this can go wrong quietly. D-Bus lays `i` and `u` out identically, so the bytes
+// for -1 and for 4294967295 are the same four bytes: reading the field as unsigned and never converting
+// turns "killed by signal 1" into a four-billion exit status, and both are numbers a page will print.
+func decodeVariantInt32(body []byte, name string) (int32, error) {
+	d := &decoder{buf: body}
+	if inner := d.signature(); inner != "i" {
+		return 0, fmt.Errorf("%s is %q, expected an int32", name, inner)
+	}
+	value := int32(d.uint32())
+
+	return value, d.err
+}
+
+// Result is systemd's own word for how this unit last finished.
+//
+// One of a fixed set — "success", "exit-code", "signal", "core-dump", "timeout", "watchdog",
+// "start-limit-hit", "oom-kill", "resources", "protocol" — and the single most useful thing that can be
+// said about a failure without reading a line of its output. It is why the unit failed, as a fact with the
+// same shape every time, which is what makes it filterable, alertable and translatable. A log excerpt is
+// none of those, and carries whatever the service happened to print.
+//
+// `.service` only, like the rest of these.
+func (c *Conn) Result(unitPath string) (string, error) {
+	return c.unitPropertyString(unitPath, serviceInterface, "Result")
+}
+
+// ExecMainStatus is the exit status of the unit's main process, when it exited.
+//
+// Only meaningful alongside {@link ExecMainCode}: a status of 0 means "exited cleanly" if the code says
+// exited, and means nothing at all if the process was killed by a signal — where this field carries the
+// signal number instead. Sent as a pair for that reason.
+func (c *Conn) ExecMainStatus(unitPath string) (int32, error) {
+	return c.unitPropertyInt32(unitPath, serviceInterface, "ExecMainStatus")
+}
+
+// ExecMainCode is *how* the main process ended, as a POSIX `si_code`: 1 exited, 2 killed, 3 dumped.
+//
+// Zero means systemd has no record of a main process having ended — a unit that never started, or one
+// still running. The caller treats that as absent rather than as "exited with 0", which is the reading
+// that would turn a unit that never ran into one that succeeded.
+func (c *Conn) ExecMainCode(unitPath string) (int32, error) {
+	return c.unitPropertyInt32(unitPath, serviceInterface, "ExecMainCode")
+}
+
 // Restarts is how many times systemd has restarted this unit since it was loaded.
 //
 // The single most useful thing systemd knows that nothing else here surfaces. A unit in a crash-restart

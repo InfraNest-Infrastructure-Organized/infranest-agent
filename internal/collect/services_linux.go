@@ -96,6 +96,27 @@ func CollectServices() ([]Service, error) {
 				if b, err := conn.MemoryCurrent(unit.Path); err == nil && b != dbus.MemoryUnknown {
 					service.MemoryBytes = &b
 				}
+
+				// Why it failed (#887) — asked only of units that actually have, which is what keeps
+				// three more property reads affordable: on a healthy machine there are none, and on an
+				// unhealthy one there are a handful. Healthy units would answer "success" for all three,
+				// which is a row of noise on every unit in the list to say nothing happened.
+				if failed {
+					if r, err := conn.Result(unit.Path); err == nil && r != "" && r != "success" {
+						service.Result = clip(r, maxState)
+					}
+
+					// Read as a pair and kept only as a pair. `ExecMainCode` is zero when systemd has no
+					// record of a main process ending — a unit that failed before it ever started, most
+					// often — and a status of 0 beside that reads as "exited cleanly", which is the
+					// opposite of what happened. Neither field is worth having without the other.
+					code, codeErr := conn.ExecMainCode(unit.Path)
+					status, statusErr := conn.ExecMainStatus(unit.Path)
+					if codeErr == nil && statusErr == nil && code != 0 {
+						service.ExecMainCode = &code
+						service.ExecMainStatus = &status
+					}
+				}
 			}
 		}
 

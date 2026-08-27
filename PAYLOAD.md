@@ -6,7 +6,7 @@ This is a **public contract**. The agent is one implementation of it; anyone may
 endpoint does not care which is talking to it. So this document is the specification rather than a
 description of our code, and where the two disagree the endpoint's validation is the authority.
 
-**Contract version 3** — current as of agent `v0.6.0`.
+**Contract version 4** — current as of agent `v0.7.0`.
 
 Every change so far has been *additive*, and that is the rule rather than a run of luck: a field is added,
 never repurposed, and never made required after the fact. A sender written against version 1 keeps working
@@ -17,6 +17,7 @@ long as anyone is running the old one.
 | Version | Added |
 |---|---|
 | 3 | `services[].restarts`, `services[].memory_bytes`, and `state_changed_at` on every unit rather than only the failed ones |
+| 4 | `services[].result`, `services[].exec_main_code` and `services[].exec_main_status` — why a failed unit failed, without its log output |
 | 2 | `disk_usage.accounted_bytes`, `disk_usage.unreadable[]`, `disk_usage.more_unreadable`, the `too_frequent` skip reason, `min_interval_seconds` in the response, and the 8 MB body limit stated with the rule that snapshots ride the newest sample only |
 | 1 | The batch envelope, samples, mounts, processes, services, system facts, `disk_usage` |
 
@@ -84,6 +85,9 @@ nothing rather than a guess.
 | `services[].state_changed_at` | RFC3339 | When the unit entered its current state. This is what "failed 2 days ago" is read from, and what makes "changed in the last day" answerable — so it is sent for **every** unit, not only the failed ones |
 | `services[].restarts` | int ≥0 | How many times the service manager has restarted this unit. Absent for units that cannot have it — a timer is not a service — rather than zero, because "never restarted" and "cannot restart" are different facts. A unit in a crash-restart loop reads as `active` every time anyone looks; this is the only field here that makes it visible |
 | `services[].memory_bytes` | int ≥0 | What this unit's cgroup is using. Per *unit*, not per process: a service that forks twenty workers is twenty rows in `processes[]` and one number here. **Absent where the platform reports it as unknown** — systemd answers `(uint64) -1` for a unit with no memory accounting, and a sender that passes that through reports sixteen exabytes |
+| `services[].result` | string ≤32 | Why the unit last finished the way it did, from a fixed vocabulary the service manager chooses from: `exit-code`, `signal`, `core-dump`, `timeout`, `watchdog`, `start-limit-hit`, `oom-kill`, `resources`, `protocol`. Sent **only for failed units**, and only when it is not `success` — a healthy unit would carry it on every row to say nothing happened. This is the answer to "why did it fail" that carries no log output: see [Why there is no log excerpt](#why-there-is-no-log-excerpt) |
+| `services[].exec_main_code` | int | How the main process ended, as a POSIX `si_code`: 1 exited, 2 killed, 3 dumped. **Send it with `exec_main_status` or not at all** |
+| `services[].exec_main_status` | int | The exit status, or the signal number when the code says killed. Meaningless alone: `0` is a clean exit beside code 1 and is not a status at all beside code 2. Both are absent together where the service manager has no record of a main process ending — which is a unit that failed before it ever started, and is a different fact from exiting with zero |
 | `system.kernel` / `system.os` | string ≤128 | |
 | `system.pending_updates` / `security_updates` | int | Absent means "could not tell", which is not zero |
 | `system.reboot_required` | bool | |
@@ -151,6 +155,27 @@ settled, so a store-and-forward sender keeps it and retries it for ever. The sec
 `mounts` is **not** a snapshot and must stay on every sample. It looks like one, but `worst_mount_percent`
 is derived per reading and is what a disk rule averages over its window — a backfilled sample without
 mounts is a hole in that series rather than a saving.
+
+## Why there is no log excerpt
+
+There is no field here for a unit's log output, and that is a decision rather than a gap.
+
+Reading the journal would mean one of three things, and each costs more than it returns. Shelling out to
+`journalctl` is not available: the agent's dependency graph is checked in CI on every platform to contain
+nothing that can run a subprocess, and that check is the promise the agent is distributed on. Linking the
+journal's own library needs cgo, which ends the static, dependency-free binary. Parsing the journal's
+on-disk format means hand-writing a reader for a compressed, hash-indexed binary format — the most
+security-sensitive code in the project, to read the file most likely to contain somebody's credentials.
+
+And it would not answer the question. Log output is prose: it needs a size cap that truncates the one line
+that mattered, a redaction pass that cannot know what a secret looks like in an arbitrary service's output,
+and a decision to put customer credentials in a database. `result` is a word from a fixed list. It says
+"killed by the OOM killer" or "start limit hit" the same way every time, so a rule can act on it, a filter
+can find it, and it can be translated — none of which prose can do.
+
+A future version may attach the last lines of output at the moment a unit enters `failed`, which is bounded
+and needs no inbound channel. It still needs a journal reader, so it inherits the cost above, and it will
+only be built if somebody asks for it.
 
 ## The lengths are not advisory
 
