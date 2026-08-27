@@ -235,8 +235,13 @@ func drivesWindows() ([]Mount, error) {
 		}
 
 		out = append(out, Mount{
-			MountPoint: root,
-			Device:     root,
+			// Clipped like the Linux collector's, for the reason limits.go gives: an over-long string
+			// does not cost its field, it fails validation for the whole push. This file called `clip`
+			// nowhere at all, and got away with it only because a drive root is three characters and
+			// NTFS bounds a filename — a coincidence rather than a decision, and not one to rely on
+			// while the caps live on the other side of a network.
+			MountPoint: clip(root, maxMountPoint),
+			Device:     clip(root, maxDevice),
 			TotalBytes: int64(totalBytes),
 			// freeForCaller, not totalFree: on a volume with quotas those differ, and the number that
 			// matters is what this account can still write.
@@ -291,7 +296,7 @@ func processesWindows(opts Options) ([]Process, error) {
 		p := Process{PID: int(pid)}
 
 		if name, nameErr := processImageName(h); nameErr == nil {
-			p.Command = name
+			p.Command = clip(name, maxCommand)
 		}
 
 		var counters processMemoryCounters

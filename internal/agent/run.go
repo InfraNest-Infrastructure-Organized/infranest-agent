@@ -38,6 +38,13 @@ const (
 // enough to matter in under an hour is one the threshold alert has already caught.
 const usageInterval = time.Hour
 
+// maxServerInterval is the slowest cadence a push response may talk this agent into.
+//
+// An hour: far above any plan anyone would sell — the slowest configurable interval is five minutes — and
+// far below the range where a typo stops looking like a cadence and starts looking like an outage. The
+// point is not the exact number; it is that the value has one, which it did not.
+const maxServerInterval = time.Hour
+
 // Sender is what Run pushes through. An interface so the loop can be tested without a network, which is
 // the only way its retry and backoff behaviour is testable at all.
 type Sender interface {
@@ -72,6 +79,8 @@ type Runner struct {
 
 	// The plan's storage cadence, as last stated by a push response (#886). Zero until one says.
 	serverInterval time.Duration
+	// The last over-ceiling value refused, so a misconfigured plan says so once rather than every push.
+	refusedInterval time.Duration
 }
 
 // Run collects on a fixed cadence and delivers whatever is waiting, until the context is cancelled.
@@ -331,18 +340,7 @@ func (r *Runner) sendOnce(ctx context.Context, url *string, state *State) error 
 		r.logf("the server did not store a reading from %s: %s", s.CollectedAt.Format(time.RFC3339), s.Reason)
 	}
 
-	// The plan's storage cadence (#886). Adopted only when it is *slower* than the configured interval:
-	// the server saying "I keep one reading every five minutes" is a reason to send less often, never a
-	// reason to send more. An operator who configured a two-minute interval on a plan that stores every
-	// thirty seconds asked for two minutes, and a server that could raise it would be able to turn any
-	// agent into a busier one by answering a push.
-	//
-	// Held in memory rather than written to the config file: the config is the operator's, and a value
-	// that arrives over the wire rewriting a file they own is a surprise. It costs one push to relearn.
-	if result.MinInterval > r.Config.Interval && result.MinInterval != r.serverInterval {
-		r.logf("InfraNest stores one reading every %s on this plan — sampling at that rate from now on", result.MinInterval)
-		r.serverInterval = result.MinInterval
-	}
+	r.applyCadence(result)
 
 	if adopted, ok := config.Adopt(*url, result.IngestURL); ok {
 		r.logf("InfraNest asked for readings to go to %s from now on", adopted)
@@ -408,4 +406,45 @@ func nextBackoff(current time.Duration) time.Duration {
 	}
 
 	return next
+}
+
+// applyCadence takes the plan's storage cadence from a push response, within limits.
+//
+// Its own method because the rules here are worth testing directly: the two directions are not
+// symmetrical, and driving a full push loop to check a bound is how a bound stops being checked.
+func (r *Runner) applyCadence(result push.Result) {
+	// The plan's storage cadence (#886). Adopted only when it is *slower* than the configured interval:
+	// the server saying "I keep one reading every five minutes" is a reason to send less often, never a
+	// reason to send more. An operator who configured a two-minute interval on a plan that stores every
+	// thirty seconds asked for two minutes, and a server that could raise it would be able to turn any
+	// agent into a busier one by answering a push.
+	//
+	// Held in memory rather than written to the config file: the config is the operator's, and a value
+	// that arrives over the wire rewriting a file they own is a surprise. It costs one push to relearn.
+	// …and only up to a ceiling, because the slow direction silences this agent and had no bound at all.
+	//
+	// The paragraph above reasons about a server making the agent *busier* and stops there. The opposite
+	// is worse and was unguarded: `min_interval_seconds` went from the wire to a `select` timer untouched,
+	// so one answer of 30000 parks this process for eight hours, and 999999999 parks it for thirty years.
+	// It cannot recover on its own — the correction only arrives on the next push, which is the thing that
+	// is no longer happening — and an operator sees an agent that has gone quiet for no visible reason.
+	//
+	// This is not a hostile-server story. `agent_min_interval` is a number an admin types into the plan
+	// builder, and a fleet-wide outage should not be one keystroke away from a cadence edit. The operator's
+	// own interval is already validated against a ceiling; an instruction arriving over the network was
+	// held to nothing.
+	//
+	// Refused rather than clamped, and said out loud: a value this far out is a mistake at the other end,
+	// and quietly sampling at the ceiling would hide it while looking like it worked.
+	switch {
+	case result.MinInterval > maxServerInterval:
+		if result.MinInterval != r.refusedInterval {
+			r.logf("InfraNest asked for one reading every %s, which is beyond the %s ceiling — ignoring it and keeping %s",
+				result.MinInterval, maxServerInterval, r.interval())
+			r.refusedInterval = result.MinInterval
+		}
+	case result.MinInterval > r.Config.Interval && result.MinInterval != r.serverInterval:
+		r.logf("InfraNest stores one reading every %s on this plan — sampling at that rate from now on", result.MinInterval)
+		r.serverInterval = result.MinInterval
+	}
 }

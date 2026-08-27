@@ -1,6 +1,9 @@
 package agent
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // snapshotFields are the parts of a reading that describe *now* rather than a moment.
 //
@@ -23,12 +26,18 @@ var snapshotFields = []string{"services", "processes", "system"}
 // It matters most exactly when it is worst: a batch is only large because the agent has been unable to
 // send, which means the network is already the problem.
 //
-// Order, not timestamps: the spool is keyed by a sequence number that increments per collection, so the
-// last entry is the most recently collected. The server picks the newest by timestamp, and for a sender
-// that appends in order the two agree — which ours does by construction.
+// By timestamp, because that is what the server picks by.
 //
-// A sample that cannot be parsed is passed through untouched. This is an optimisation, and an
-// optimisation that drops readings when it meets something unexpected is worse than the cost it saves.
+// This used to keep the last sample by *position*, on the grounds that the spool appends in sequence
+// order so position and time agree "by construction". They agree only while the clock moves forwards. An
+// NTP correction or a resumed VM can stamp a later collection with an earlier time, and then the two ends
+// disagree about which sample is newest: this strips the snapshot from the one the server is about to
+// read it from, and that batch silently updates no services, processes or system facts at all. It
+// self-heals on the next push, which is precisely why nobody would ever catch it.
+//
+// A sample whose timestamp cannot be read falls back to its position, and a sample that cannot be parsed
+// at all is passed through untouched. This is an optimisation, and an optimisation that drops readings
+// when it meets something unexpected is worse than the cost it saves.
 func trimSnapshots(samples []json.RawMessage) []json.RawMessage {
 	if len(samples) < 2 {
 		return samples
@@ -37,7 +46,12 @@ func trimSnapshots(samples []json.RawMessage) []json.RawMessage {
 	out := make([]json.RawMessage, len(samples))
 	copy(out, samples)
 
-	for i := 0; i < len(out)-1; i++ {
+	keep := newestIndex(out)
+
+	for i := 0; i < len(out); i++ {
+		if i == keep {
+			continue
+		}
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal(out[i], &fields); err != nil {
 			continue
@@ -60,4 +74,30 @@ func trimSnapshots(samples []json.RawMessage) []json.RawMessage {
 	}
 
 	return out
+}
+
+// newestIndex is the sample the server will treat as current: the greatest `collected_at`.
+//
+// Ties and unreadable timestamps both fall back to the later position, which is what this used to do for
+// every sample. That keeps the old behaviour as the floor rather than the rule — a batch the clock never
+// disturbed trims exactly as before.
+func newestIndex(samples []json.RawMessage) int {
+	keep := len(samples) - 1
+
+	var best time.Time
+	found := false
+
+	for i, raw := range samples {
+		var fields struct {
+			CollectedAt time.Time `json:"collected_at"`
+		}
+		if err := json.Unmarshal(raw, &fields); err != nil || fields.CollectedAt.IsZero() {
+			continue
+		}
+		if !found || !fields.CollectedAt.Before(best) {
+			best, keep, found = fields.CollectedAt, i, true
+		}
+	}
+
+	return keep
 }

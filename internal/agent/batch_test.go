@@ -89,3 +89,58 @@ func TestASingleSampleBatchIsLeftAlone(t *testing.T) {
 		t.Fatalf("the only sample lost its snapshots: %s", out[0])
 	}
 }
+
+// A clock that steps backwards mid-batch must not strip the sample the server will read.
+//
+// The spool appends in sequence order, so position and time agreed "by construction" — right up until an
+// NTP correction or a resumed VM stamps a later collection with an earlier time. Trimming by position
+// then removes the snapshot from the sample the server picks by timestamp, and that whole batch updates
+// no services, processes or system facts at all. It self-heals on the next push, which is exactly why it
+// would never be caught in the wild.
+func TestTheSampleTheServerReadsKeepsItsSnapshotsWhenTheClockStepsBack(t *testing.T) {
+	in := []json.RawMessage{
+		sample(t, `{"collected_at":"2026-08-26T10:00:00Z","cpu_percent":1,"services":[{"unit":"a"}]}`),
+		// The newest by time, and NOT last in the batch — the clock was corrected after it was collected.
+		sample(t, `{"collected_at":"2026-08-26T10:05:00Z","cpu_percent":2,"services":[{"unit":"b"}]}`),
+		sample(t, `{"collected_at":"2026-08-26T10:02:00Z","cpu_percent":3,"services":[{"unit":"c"}]}`),
+	}
+
+	out := trimSnapshots(in)
+
+	if !strings.Contains(string(out[1]), `"services"`) {
+		t.Fatalf("the newest sample by timestamp lost its snapshot, so the server has nothing to apply: %s", out[1])
+	}
+	for _, i := range []int{0, 2} {
+		if strings.Contains(string(out[i]), `"services"`) {
+			t.Fatalf("sample %d kept a snapshot the server will ignore: %s", i, out[i])
+		}
+	}
+}
+
+// With a well-behaved clock, nothing changes: the last sample is both newest and last.
+func TestAMonotonicClockStillTrimsToTheLastSample(t *testing.T) {
+	in := []json.RawMessage{
+		sample(t, `{"collected_at":"2026-08-26T10:00:00Z","services":[{"unit":"a"}]}`),
+		sample(t, `{"collected_at":"2026-08-26T10:01:00Z","services":[{"unit":"b"}]}`),
+	}
+
+	out := trimSnapshots(in)
+
+	if strings.Contains(string(out[0]), `"services"`) || !strings.Contains(string(out[1]), `"services"`) {
+		t.Fatalf("ordinary batch trimmed wrongly: %s | %s", out[0], out[1])
+	}
+}
+
+// No usable timestamps at all falls back to position — the behaviour this replaced.
+func TestSamplesWithNoTimestampFallBackToPosition(t *testing.T) {
+	in := []json.RawMessage{
+		sample(t, `{"services":[{"unit":"a"}]}`),
+		sample(t, `{"services":[{"unit":"b"}]}`),
+	}
+
+	out := trimSnapshots(in)
+
+	if !strings.Contains(string(out[1]), `"services"`) {
+		t.Fatalf("with no timestamps the last sample should be kept: %s", out[1])
+	}
+}
