@@ -48,7 +48,7 @@ const maxServerInterval = time.Hour
 // Sender is what Run pushes through. An interface so the loop can be tested without a network, which is
 // the only way its retry and backoff behaviour is testable at all.
 type Sender interface {
-	Send(ctx context.Context, url string, samples []json.RawMessage, failed map[string]string, usage any) (push.Result, error)
+	Send(ctx context.Context, url string, samples []json.RawMessage, failed map[string]string, usage any, collectors push.Collectors) (push.Result, error)
 }
 
 type Runner struct {
@@ -284,7 +284,13 @@ func (r *Runner) sendOnce(ctx context.Context, url *string, state *State) error 
 		usage = r.pendingUsage
 	}
 
-	result, err := r.Sender.Send(ctx, *url, samples, nil, usage)
+	// What this agent is configured to collect, sent every push rather than once at install: the config
+	// can be edited and the agent restarted, and nothing else would tell the server that happened.
+	result, err := r.Sender.Send(ctx, *url, samples, nil, usage, push.Collectors{
+		Processes:   r.Config.Processes,
+		ProcessArgs: r.Config.ProcessArgs,
+		Services:    r.Config.Services,
+	})
 
 	if !result.ServerTime.IsZero() {
 		// Measured against our own clock at the moment we asked, which is close enough: the request

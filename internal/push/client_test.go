@@ -28,7 +28,7 @@ func send(t *testing.T, handler http.HandlerFunc, samples ...string) (Result, er
 	c.HTTP = srv.Client()
 	c.HTTP.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
-	return c.Send(context.Background(), srv.URL, raw, nil, nil)
+	return c.Send(context.Background(), srv.URL, raw, nil, nil, Collectors{})
 }
 
 func TestTheBodyIsAlwaysABatch(t *testing.T) {
@@ -174,7 +174,7 @@ func TestAScanRidesAlongOnThePushAfterIt(t *testing.T) {
 	c.HTTP = srv.Client()
 
 	scan := map[string]any{"mount_point": "/var", "dirs": []any{}}
-	if _, err := c.Send(context.Background(), srv.URL, []json.RawMessage{json.RawMessage(`{"cpu_percent":1}`)}, nil, scan); err != nil {
+	if _, err := c.Send(context.Background(), srv.URL, []json.RawMessage{json.RawMessage(`{"cpu_percent":1}`)}, nil, scan, Collectors{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -213,5 +213,42 @@ func TestAForbiddenWithoutAReasonIsStillARejectedToken(t *testing.T) {
 	}
 	if errors.Is(err, ErrNotActivated) {
 		t.Fatal("a rejected token was reported as deactivated monitoring")
+	}
+}
+
+// The receiver has to be able to tell "switched off" from "nothing to report".
+//
+// An absent `processes` array means one of those two, and the payload never said which — so the UI read
+// "process reporting is off" out of an empty list. True in practice and wrong the other way: an agent
+// installed a minute ago has not sent a process list either.
+func TestThePayloadSaysWhichCollectorsAreOn(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.WriteHeader(201)
+		_, _ = w.Write([]byte(`{"accepted":1}`))
+	}))
+	defer srv.Close()
+
+	c := New("sat_x", "v0.8.0")
+	_, err := c.Send(context.Background(), srv.URL, []json.RawMessage{json.RawMessage(`{"cpu_percent":1}`)},
+		nil, nil, Collectors{Processes: false, ProcessArgs: false, Services: true})
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	got, ok := body["collectors"].(map[string]any)
+	if !ok {
+		t.Fatalf("no collectors object in the payload: %v", body)
+	}
+	// `false` is the whole point, so it must survive the round trip rather than being omitted.
+	if got["processes"] != false {
+		t.Fatalf("processes = %v, want false — an omitted false puts the receiver back to guessing", got["processes"])
+	}
+	if got["services"] != true {
+		t.Fatalf("services = %v, want true", got["services"])
+	}
+	if _, present := got["process_args"]; !present {
+		t.Fatal("process_args is missing; every flag is sent or none of them can be trusted")
 	}
 }
