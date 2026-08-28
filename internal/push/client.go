@@ -18,6 +18,22 @@ import (
 	"time"
 )
 
+// Collectors is which of the optional collectors this agent has switched on.
+//
+// Sent because the receiver could not otherwise tell "off" from "nothing to report". An absent
+// `processes` array means one of those two things and the payload never said which, so the UI inferred
+// it — "process reporting is switched off" was read from an empty list. True in practice, since a machine
+// always has at least one process, and wrong the other way: an agent installed a minute ago has not
+// pushed a process list either, and was told it had them switched off.
+//
+// Absent vs zero vs off is the distinction this whole payload is careful about everywhere else. It was
+// missing for the one thing an operator actually has to go and change.
+type Collectors struct {
+	Processes   bool `json:"processes"`
+	ProcessArgs bool `json:"process_args"`
+	Services    bool `json:"services"`
+}
+
 // Result is what one push accomplished.
 type Result struct {
 	Accepted   int
@@ -104,10 +120,10 @@ func New(token, version string) *Client {
 }
 
 // Send posts a batch of readings and reports what the server did with them.
-func (c *Client) Send(ctx context.Context, url string, samples []json.RawMessage, failed map[string]string, usage any) (Result, error) {
+func (c *Client) Send(ctx context.Context, url string, samples []json.RawMessage, failed map[string]string, usage any, collectors Collectors) (Result, error) {
 	var result Result
 
-	body, err := encode(samples, failed, c.Version, usage)
+	body, err := encode(samples, failed, c.Version, usage, collectors)
 	if err != nil {
 		return result, err
 	}
@@ -181,17 +197,20 @@ func (c *Client) Send(ctx context.Context, url string, samples []json.RawMessage
 // `samples` are already-marshalled readings straight from the spool, so a reading is written once when it
 // is collected and never re-encoded — which is also what keeps a reading that was collected by an older
 // version of the agent sendable by a newer one.
-func encode(samples []json.RawMessage, failed map[string]string, version string, usage any) ([]byte, error) {
+func encode(samples []json.RawMessage, failed map[string]string, version string, usage any, collectors Collectors) ([]byte, error) {
 	payload := struct {
 		Samples      []json.RawMessage `json:"samples"`
 		Failed       map[string]string `json:"failed,omitempty"`
 		AgentVersion string            `json:"agent_version,omitempty"`
+		// Never omitted, and the booleans are never omitempty: `false` is the answer that matters here,
+		// and a field that disappears when it is false would put the receiver back to inferring.
+		Collectors Collectors `json:"collectors"`
 		// A directory listing rides along on whichever push follows a scan, rather than having a delivery
 		// path of its own. The sending half already has retry, backoff and a spool; a second one for a
 		// single payload would be a second thing to get wrong. Omitted entirely on the pushes between
 		// scans, which is nearly all of them.
 		DiskUsage any `json:"disk_usage,omitempty"`
-	}{Samples: samples, Failed: failed, AgentVersion: version, DiskUsage: usage}
+	}{Samples: samples, Failed: failed, AgentVersion: version, Collectors: collectors, DiskUsage: usage}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
