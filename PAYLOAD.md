@@ -208,7 +208,7 @@ Deliberately asymmetric, because the future and the past are different problems.
   "accepted": 2,
   "skipped": [ { "index": 0, "reason": "already_covered", "collected_at": "…" } ],
   "server_time": "2026-08-26T08:19:51Z",
-  "ingest_url": "https://ingest.infranest.app",
+  "ingest_url": "https://ingest.infranest.io",
   "min_interval_seconds": 60
 }
 ```

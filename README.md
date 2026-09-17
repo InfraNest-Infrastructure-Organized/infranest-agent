@@ -20,7 +20,7 @@
 
 ---
 
-The [InfraNest](https://infranest.app) monitoring agent. It reads a handful of numbers from the machine it
+The [InfraNest](https://infranest.io) monitoring agent. It reads a handful of numbers from the machine it
 runs on and posts them to your InfraNest account.
 
 It takes no instructions, executes nothing, and opens no ports: there is no listening socket and no remote
@@ -330,7 +330,7 @@ All optional except the token, and all set for you by the installer.
 | | |
 |---|---|
 | `INFRANEST_TOKEN` | the server token. Required |
-| `INFRANEST_URL` | where to send. Default `https://ingest.infranest.app` |
+| `INFRANEST_URL` | where to send. Default `https://ingest.infranest.io` |
 | `INFRANEST_INTERVAL` | how often to collect. Default `60s`, between `10s` and `5m` |
 | `INFRANEST_STATE_DIR` | spool and state. Default `/var/lib/infranest-agent` |
 | `INFRANEST_PROCESSES` | collect the busiest processes. Off by default |
@@ -358,7 +358,7 @@ use in the one case it exists for. It never prints your token, so it is safe to 
 
 ```
 $ infranest-agent status
-Sending to:   https://ingest.infranest.app/api/metrics/push
+Sending to:   https://ingest.infranest.io/api/metrics/push
 Every:        1m0s
 State in:     /var/lib/infranest-agent
 Waiting:      2 reading(s) not yet delivered
@@ -392,12 +392,31 @@ reporting to a third party. Allowlist that one host and block the rest if you wa
 **If that address ever has to change**, you should not have to visit your servers. Two things make that
 true, and neither needs you:
 
-- `ingest.infranest.app` is a name we intend never to change. What is behind it — host, region, provider —
+- `ingest.infranest.io` is a name we intend never to change. What is behind it — host, region, provider —
   can move at any time, and DNS is what makes that invisible.
 - If the *name itself* has to change, a push response can say so and the agent will follow it. It follows
   only over HTTPS and only to a host in the same domain it is already sending to, so this can move a fleet
   between our own hosts and cannot be used, by anyone who manages to answer a single push, to point your
   servers somewhere else for good. HTTP redirects are refused outright, for the same reason.
+
+### Moving the ingest host
+
+The second bullet has a limit worth stating plainly, because we have now met it: **the agent will not
+follow a move to a different registrable domain.** `ingest.infranest.app` → `ingest.infranest.io` is
+exactly such a move, and the mechanism designed for re-pointing a fleet refuses it.
+
+That is deliberate, and it is the same property that protects you. Somebody who manages to answer one push
+can already see that push; letting them hand back a hostname they own would let them keep your servers'
+readings permanently. Distinguishing "our other host" from "a host they own" is what the same-domain rule
+does, and there is no version of it that allows a genuine domain change without also allowing that.
+
+Two consequences, both ours rather than yours:
+
+- A domain move means re-running the installer on each machine. There is no self-update, so a more
+  permissive agent would only ever reach machines installed *after* it shipped.
+- We therefore treat the ingest hostname as a permanent commitment, and made the `infranest.app` →
+  `infranest.io` move before anyone had the agent installed. If it ever has to happen again, it will be
+  announced with a lead time and a command to run, not performed silently.
 
 Nothing about this is hardcoded either: `INFRANEST_URL` is yours to set, and self-hosted installations
 point it at their own address.
@@ -410,12 +429,12 @@ dependencies — both are checked in CI, not just asked for.
 
 ## InfraNest
 
-This agent is one piece of [InfraNest](https://infranest.app) — domains, DNS, cloud servers, certificates
+This agent is one piece of [InfraNest](https://infranest.io) — domains, DNS, cloud servers, certificates
 and uptime monitoring in one place, across every provider.
 
-- **[infranest.app](https://infranest.app)** — what the platform does
-- **[infranest.app/docs](https://infranest.app/docs/)** — documentation and help centre
-- **[dashboard.infranest.app](https://dashboard.infranest.app)** — sign in
+- **[infranest.io](https://infranest.io)** — what the platform does
+- **[infranest.io/docs](https://infranest.io/docs/)** — documentation and help centre
+- **[app.infranest.io](https://app.infranest.io)** — sign in
 
 You do not need an InfraNest account to read this code, and the agent is useful to look at either way: it
 is a small, dependency-free example of reading `/proc` and `statfs` from Go.

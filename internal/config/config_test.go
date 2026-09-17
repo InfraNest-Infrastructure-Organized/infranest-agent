@@ -70,19 +70,19 @@ func TestThePushPathIsDerivedNotConfigured(t *testing.T) {
 }
 
 func TestARedirectIsTakenOnlyWithinTheSameDomain(t *testing.T) {
-	const current = "https://ingest.infranest.app/api/metrics/push"
+	const current = "https://ingest.infranest.io/api/metrics/push"
 
 	// The legitimate case: we move the fleet between our own hosts without anyone visiting a machine.
-	if got, ok := Adopt(current, "https://ingest-eu.infranest.app/api/metrics/push"); !ok || !strings.Contains(got, "ingest-eu") {
+	if got, ok := Adopt(current, "https://ingest-eu.infranest.io/api/metrics/push"); !ok || !strings.Contains(got, "ingest-eu") {
 		t.Fatalf("expected a same-domain move to be adopted, got %q %v", got, ok)
 	}
 
 	// The case this rule exists for. Anyone able to answer one push can already read it; being able to
 	// keep the fleet for good is a different and permanent thing.
 	for _, hostile := range []string{
-		"https://ingest.infranest.app.evil.com/api/metrics/push",
+		"https://ingest.infranest.io.evil.com/api/metrics/push",
 		"https://evil.com/api/metrics/push",
-		"http://ingest.infranest.app/api/metrics/push",
+		"http://ingest.infranest.io/api/metrics/push",
 		"not a url at all",
 	} {
 		if got, ok := Adopt(current, hostile); ok || got != current {

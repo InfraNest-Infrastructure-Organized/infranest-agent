@@ -61,7 +61,7 @@ func harness(t *testing.T, sender *fakeSender, ticks int) (*Runner, *strings.Bui
 	fired := 0
 
 	r := &Runner{
-		Config: config.Config{Token: "sat_x", URL: "https://ingest.infranest.app", Interval: time.Minute, StateDir: dir},
+		Config: config.Config{Token: "sat_x", URL: "https://ingest.infranest.io", Interval: time.Minute, StateDir: dir},
 		Sender: sender,
 		Spool:  sp,
 		Log:    log,
@@ -164,7 +164,7 @@ func TestARejectedTokenBacksRightOffInsteadOfHammering(t *testing.T) {
 func TestAMoveIsFollowedOnlyWithinOurOwnDomain(t *testing.T) {
 	sender := &fakeSender{answer: func(n int) (push.Result, error) {
 		if n == 1 {
-			return push.Result{Accepted: 1, IngestURL: "https://ingest-eu.infranest.app"}, nil
+			return push.Result{Accepted: 1, IngestURL: "https://ingest-eu.infranest.io"}, nil
 		}
 
 		return push.Result{Accepted: 1}, nil
@@ -172,7 +172,7 @@ func TestAMoveIsFollowedOnlyWithinOurOwnDomain(t *testing.T) {
 
 	r, _, _ := harness(t, sender, 4)
 
-	if len(sender.urls) < 2 || !strings.Contains(sender.urls[1], "ingest-eu.infranest.app") {
+	if len(sender.urls) < 2 || !strings.Contains(sender.urls[1], "ingest-eu.infranest.io") {
 		t.Fatalf("expected the second push to follow the move, got %v", sender.urls)
 	}
 	// Persisted, or every restart would quietly send the fleet back to whatever the installer wrote.
@@ -183,7 +183,7 @@ func TestAMoveIsFollowedOnlyWithinOurOwnDomain(t *testing.T) {
 
 func TestAHostileMoveIsIgnored(t *testing.T) {
 	sender := &fakeSender{answer: func(int) (push.Result, error) {
-		return push.Result{Accepted: 1, IngestURL: "https://ingest.infranest.app.evil.com"}, nil
+		return push.Result{Accepted: 1, IngestURL: "https://ingest.infranest.io.evil.com"}, nil
 	}}
 
 	_, _, _ = harness(t, sender, 3)
@@ -214,7 +214,7 @@ func TestStatusExplainsARejectedTokenWithoutReachingAnything(t *testing.T) {
 	// The question is usually asked *because* the machine cannot reach us, so an answer that has to reach
 	// us is no use in the one case it exists for.
 	dir := t.TempDir()
-	cfg := config.Config{URL: "https://ingest.infranest.app", Interval: time.Minute, StateDir: dir}
+	cfg := config.Config{URL: "https://ingest.infranest.io", Interval: time.Minute, StateDir: dir}
 
 	if err := SaveState(dir, State{TokenRejected: true, TokenRejectedAt: time.Now().Add(-time.Hour)}); err != nil {
 		t.Fatal(err)
@@ -235,7 +235,7 @@ func TestStatusNeverPrintsTheToken(t *testing.T) {
 	// It is written to be pasted into a support ticket.
 	dir := t.TempDir()
 	out := &strings.Builder{}
-	Status(out, config.Config{Token: "sat_super_secret_value", URL: "https://ingest.infranest.app", StateDir: dir}, time.Now())
+	Status(out, config.Config{Token: "sat_super_secret_value", URL: "https://ingest.infranest.io", StateDir: dir}, time.Now())
 
 	if strings.Contains(out.String(), "sat_super_secret") {
 		t.Fatal("status printed the token")
@@ -254,7 +254,7 @@ func TestStatusNamesTheCollectorsThatAreFailing(t *testing.T) {
 	})
 
 	out := &strings.Builder{}
-	Status(out, config.Config{URL: "https://ingest.infranest.app", StateDir: dir}, time.Now())
+	Status(out, config.Config{URL: "https://ingest.infranest.io", StateDir: dir}, time.Now())
 
 	got := out.String()
 	for _, want := range []string{"COLLECTORS", "memory", "permission denied", "still being collected"} {
@@ -280,7 +280,7 @@ func TestAFailedCollectorIsRecordedEvenWhenNothingCanBeSent(t *testing.T) {
 	clock := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	fired := 0
 	r := &Runner{
-		Config: config.Config{Token: "sat_x", URL: "https://ingest.infranest.app", Interval: time.Minute, StateDir: dir},
+		Config: config.Config{Token: "sat_x", URL: "https://ingest.infranest.io", Interval: time.Minute, StateDir: dir},
 		Sender: sender,
 		Spool:  sp,
 		Log:    &strings.Builder{},
@@ -367,7 +367,7 @@ func TestTheDiskIsWalkedOnceAnHourAtMost(t *testing.T) {
 	fired, scans := 0, 0
 
 	r := &Runner{
-		Config: config.Config{Token: "sat_x", URL: "https://ingest.infranest.app", Interval: time.Minute, StateDir: dir},
+		Config: config.Config{Token: "sat_x", URL: "https://ingest.infranest.io", Interval: time.Minute, StateDir: dir},
 		Sender: sender,
 		Spool:  sp,
 		Log:    &strings.Builder{},
@@ -429,7 +429,7 @@ func TestAScanIsNotResentAfterItLands(t *testing.T) {
 	fired := 0
 
 	r := &Runner{
-		Config: config.Config{Token: "sat_x", URL: "https://ingest.infranest.app", Interval: time.Minute, StateDir: dir},
+		Config: config.Config{Token: "sat_x", URL: "https://ingest.infranest.io", Interval: time.Minute, StateDir: dir},
 		Sender: sender,
 		Spool:  sp,
 		Log:    &strings.Builder{},
@@ -498,7 +498,7 @@ func TestStatusTellsSomebodyNotToReinstallAWorkingAgent(t *testing.T) {
 	// dead credential, and the answer to a dead credential is to install a new one — which replaces an
 	// agent that is working perfectly and changes nothing.
 	dir := t.TempDir()
-	cfg := config.Config{URL: "https://ingest.infranest.app", Interval: time.Minute, StateDir: dir}
+	cfg := config.Config{URL: "https://ingest.infranest.io", Interval: time.Minute, StateDir: dir}
 
 	if err := SaveState(dir, State{NotActivated: true, NotActivatedAt: time.Now().Add(-2 * time.Hour)}); err != nil {
 		t.Fatal(err)
@@ -530,7 +530,7 @@ func TestStatusTellsSomebodyNotToReinstallAWorkingAgent(t *testing.T) {
 // ever going to be found: every test until now ran as one user.
 func TestStatusCreatesNothing(t *testing.T) {
 	dir := t.TempDir()
-	cfg := config.Config{URL: "https://ingest.infranest.app", Interval: time.Minute, StateDir: dir}
+	cfg := config.Config{URL: "https://ingest.infranest.io", Interval: time.Minute, StateDir: dir}
 
 	Status(&strings.Builder{}, cfg, time.Now())
 
@@ -551,7 +551,7 @@ func TestStatusCreatesNothing(t *testing.T) {
 // arriving" was the one place the answer was missing.
 func TestStatusNamesASpoolItCannotWrite(t *testing.T) {
 	dir := t.TempDir()
-	cfg := config.Config{URL: "https://ingest.infranest.app", Interval: time.Minute, StateDir: dir}
+	cfg := config.Config{URL: "https://ingest.infranest.io", Interval: time.Minute, StateDir: dir}
 
 	if err := SaveState(dir, State{SpoolError: "cannot write the reading: permission denied"}); err != nil {
 		t.Fatal(err)

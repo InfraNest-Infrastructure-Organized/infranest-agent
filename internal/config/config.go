@@ -21,7 +21,7 @@ import (
 // installed, and re-pointing it is not a deploy. The second layer is the `ingest_url` a push response may
 // name — see Config.Adopt — which exists for the case where the *name itself* has to change. Between the
 // two, an installed agent should never need a human to visit the machine.
-const DefaultURL = "https://ingest.infranest.app"
+const DefaultURL = "https://ingest.infranest.io"
 
 // Bounds on the collection interval. Below the floor an agent is a load generator rather than a monitor —
 // and the server's own silence rule cannot mean anything faster than a minute anyway. Above the ceiling
@@ -177,7 +177,8 @@ func Adopt(current, offered string) (string, bool) {
 // fleet be pointed somewhere else for good. A public-suffix list would make this exactly right and would
 // mean vendoring a list that changes, in a binary whose whole claim is that it has no dependencies.
 //
-// It is sound because `infranest.app` has a single-label TLD. On a two-label one it would be too loose in
+// It is sound because `infranest.io` has a single-label TLD — as `infranest.app` did. On a two-label one it
+// would be too loose in
 // exactly the direction the paragraph above calls the dangerous one: under `example.co.uk` this reduces to
 // `co.uk`, so every UK domain would look like the same site. If the ingest host ever moves to such a
 // domain this stops being a guard, and nothing will say so — which is why it is written down here rather
