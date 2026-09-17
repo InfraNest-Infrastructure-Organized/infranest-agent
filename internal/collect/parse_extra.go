@@ -149,7 +149,12 @@ type procTimes struct {
 	// two readings over a known interval is the share of a core it was using.
 	CPUTicks uint64
 	// Ticks between boot and this process starting.
-	StartTicks uint64
+	//
+	// Signed, unlike CPUTicks, because the only thing done with it beyond an equality test is arithmetic
+	// against a boot time in int64 seconds. Parsing it as signed removes that conversion rather than
+	// guarding it: /proc renders an unsigned value, so a number above MaxInt64 is refused here — where it
+	// becomes an omitted start time — instead of silently turning negative and producing a date in 1969.
+	StartTicks int64
 }
 
 // parseProcTimes reads the CPU and start-time fields out of a /proc/<pid>/stat line.
@@ -176,7 +181,7 @@ func parseProcTimes(stat string) (procTimes, error) {
 	if err != nil {
 		return procTimes{}, fmt.Errorf("stime: %w", err)
 	}
-	start, err := strconv.ParseUint(fields[19], 10, 64)
+	start, err := strconv.ParseInt(fields[19], 10, 64)
 	if err != nil {
 		return procTimes{}, fmt.Errorf("starttime: %w", err)
 	}

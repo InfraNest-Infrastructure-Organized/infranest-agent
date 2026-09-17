@@ -292,7 +292,7 @@ func readProcesses(opts Options) ([]Process, error) {
 			// wrong when /proc/stat could not be read: a start time computed from a boot time we do not
 			// have would be an arbitrary date, and a date is believed in a way a dash is not.
 			if bootedAt > 0 {
-				at := time.Unix(bootedAt+int64(times.StartTicks)/userHz, 0).UTC()
+				at := time.Unix(bootedAt+times.StartTicks/userHz, 0).UTC()
 				p.StartedAt = &at
 			}
 		}
