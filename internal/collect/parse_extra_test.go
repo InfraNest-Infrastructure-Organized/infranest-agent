@@ -261,6 +261,33 @@ func TestProcTimesAreReadAfterTheCommNotFromTheStart(t *testing.T) {
 	}
 }
 
+// A starttime above MaxInt64 is refused rather than wrapped.
+//
+// /proc renders starttime as unsigned, and it used to be parsed that way and then converted to int64 to
+// be added to the boot time. An unsigned value above MaxInt64 becomes negative in that conversion, and no
+// error is raised — 2^63 rendered as `-2922768221-05-18T01:37:22Z`, measured rather than reasoned about.
+//
+// Refusing it costs one absent start time on a machine whose /proc is lying, which is what the caller
+// already does when /proc/stat cannot be read at all. Accepting it puts a fabricated date on the page.
+func TestAnImplausibleStartTimeIsRefusedRatherThanWrapped(t *testing.T) {
+	// 2^63 — one past MaxInt64, in the starttime field.
+	line := "1 (init) S 1 1 1 0 -1 0 1 2 0 0 10 20 0 0 20 0 1 0 9223372036854775808 1 2"
+
+	if _, err := parseProcTimes(line); err == nil {
+		t.Fatal("a starttime above MaxInt64 was accepted; it must be refused, not wrapped negative")
+	}
+
+	// And the boundary itself still parses, so the guard is not off by one.
+	ok := "1 (init) S 1 1 1 0 -1 0 1 2 0 0 10 20 0 0 20 0 1 0 9223372036854775807 1 2"
+	got, err := parseProcTimes(ok)
+	if err != nil {
+		t.Fatalf("MaxInt64 starttime should parse: %v", err)
+	}
+	if got.StartTicks != 9223372036854775807 {
+		t.Fatalf("StartTicks = %d, want MaxInt64", got.StartTicks)
+	}
+}
+
 func TestBootTimeIsReadFromProcStat(t *testing.T) {
 	// A process's start time is recorded relative to boot, so without this the page can say a process has
 	// been running three days but not since when — and "since when" is the half that lines up with
