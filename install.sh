@@ -20,7 +20,7 @@ SERVICE="infranest-agent"
 VERSION="latest"
 TOKEN=""
 TOKEN_FILE=""
-API_URL="https://ingest.infranest.app"
+API_URL="https://ingest.infranest.io"
 FROM_FILE=""
 DO_UNINSTALL=0
 
@@ -33,7 +33,7 @@ Install the InfraNest monitoring agent.
 Options:
   --token <token>        the server token, from your server's page in InfraNest
   --token-file <path>    read the token from a file instead, so it never reaches your shell history
-  --url <url>            where to send readings (default: https://ingest.infranest.app)
+  --url <url>            where to send readings (default: https://ingest.infranest.io)
   --version <version>    install a specific version instead of the latest
   --from <path>          install a binary you already have, instead of downloading one
   --uninstall            remove the agent, its user, its config and its data

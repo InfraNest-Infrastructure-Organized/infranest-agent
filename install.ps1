@@ -24,7 +24,7 @@ param(
     [string]$TokenFile,
 
     # Where to send readings.
-    [string]$Url = 'https://ingest.infranest.app',
+    [string]$Url = 'https://ingest.infranest.io',
 
     # Install a specific version instead of the latest.
     [string]$Version = 'latest',

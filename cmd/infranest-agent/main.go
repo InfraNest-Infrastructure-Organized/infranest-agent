@@ -295,7 +295,7 @@ Flags:
 
 Configuration (from the environment; systemd reads /etc/infranest/agent.conf):
   INFRANEST_TOKEN        the server token             (required)
-  INFRANEST_URL          where to send                (default https://ingest.infranest.app)
+  INFRANEST_URL          where to send                (default https://ingest.infranest.io)
   INFRANEST_INTERVAL     how often to collect         (default 60s, between 10s and 5m)
   INFRANEST_STATE_DIR    spool and state              (default /var/lib/infranest-agent)
   INFRANEST_PROCESSES    collect the busiest processes
