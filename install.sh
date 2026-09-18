@@ -385,11 +385,14 @@ echo "Check it is working:"
 echo "    sudo ${BIN_DIR}/infranest-agent status"
 echo
 echo "Remove it completely:"
+# The one-command path, when there is still a script to run it with.
 if invoked_as_a_file; then
   echo "    sudo sh $0 --uninstall"
-else
-  # Piped, so there is no script to point at. The binary is at a known path and prints the exact
-  # commands for this machine — it cannot run them itself, because it starts no subprocesses.
-  echo "    sudo ${BIN_DIR}/infranest-agent uninstall     # prints the commands to run"
 fi
+# And the one that does not depend on keeping anything: the binary is installed, it is on PATH, and it
+# prints the exact commands for this machine. It cannot run them itself — it starts no subprocesses,
+# which is the property that makes it worth installing. Printed even when the line above was, because
+# the script is the transient half: somebody who downloaded it, ran it, and tidied up afterwards has
+# otherwise been given the one instruction that stops working.
+echo "    sudo ${BIN_DIR}/infranest-agent uninstall     # prints the commands, any time"
 echo

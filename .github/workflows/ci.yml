@@ -127,7 +127,7 @@ jobs:
           helper=$(sed -n '/^invoked_as_a_file() /p' install.sh)
           [ -n "$helper" ] || { echo "::error::install.sh has no invoked_as_a_file helper"; exit 1; }
 
-          hint=$(sed -n '/^echo "Remove it completely:"$/,/^fi$/p' install.sh)
+          hint=$(sed -n '/^echo "Remove it completely:"$/,/infranest-agent uninstall/p' install.sh)
           [ -n "$hint" ] || { echo "::error::could not find the uninstall hint"; exit 1; }
 
           out=$(printf 'BIN_DIR=/usr/local/bin\n%s\n%s\n' "$helper" "$hint" | sh -s)
