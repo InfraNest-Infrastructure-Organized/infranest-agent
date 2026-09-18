@@ -113,6 +113,45 @@ jobs:
           grep -qx 'NoNewPrivileges=yes' /tmp/embedded.service \
             || { echo "::error::the embedded unit lost NoNewPrivileges"; exit 1; }
 
+      # `--processes` decides what leaves a customer's machine, so both directions are asserted: asked for,
+      # it must actually be written; not asked for, it must stay commented out. Neither is visible until
+      # somebody installs an agent and looks at what arrived, which is far too late to notice.
+      #
+      # The branch and the template are lifted out of install.sh rather than restated here — a check that
+      # repeats the logic it is checking passes when the installer is wrong.
+      - name: --processes writes the setting, and only when asked
+        run: |
+          decision=$(sed -n '/^if \[ "\$PROCESSES" -eq 1 \]; then$/,/^fi$/p' install.sh)
+          [ -n "$decision" ] || { echo "::error::could not find the PROCESSES branch in install.sh"; exit 1; }
+
+          tmpl=$(sed -n '/^cat > "${CONF_DIR}\/agent.conf" <<CONF$/,/^CONF$/p' install.sh | sed '1d;$d')
+          [ -n "$tmpl" ] || { echo "::error::could not find the agent.conf template in install.sh"; exit 1; }
+
+          render() {
+            PROCESSES=$1
+            eval "$decision"
+            TOKEN=sat_test API_URL=https://example.test USER_NAME=infranest-agent
+            eval "cat <<CONF
+          $tmpl
+          CONF"
+          }
+
+          echo "$(render 0)" | grep -qx '#INFRANEST_PROCESSES=1' \
+            || { echo "::error::without --processes the setting must stay commented out"; exit 1; }
+          echo "$(render 1)" | grep -qx 'INFRANEST_PROCESSES=1' \
+            || { echo "::error::--processes must write INFRANEST_PROCESSES=1"; exit 1; }
+          # Command lines are a second, separate decision — one flag must never grant both.
+          echo "$(render 1)" | grep -qx '#INFRANEST_PROCESS_ARGS=1' \
+            || { echo "::error::--processes must not also turn on INFRANEST_PROCESS_ARGS"; exit 1; }
+
+          sh install.sh --help | grep -q -- '--processes' \
+            || { echo "::error::--processes is not documented in --help"; exit 1; }
+          # And that it is actually *accepted*: the render above sets the variable directly, so deleting
+          # the option from the parser leaves every other assertion here passing while the flag dies with
+          # "unknown option". `--help` exits inside the parse loop, before the root check.
+          sh install.sh --processes --help >/dev/null 2>&1 \
+            || { echo "::error::install.sh does not accept --processes"; exit 1; }
+
       # `net` and `net/http` are legitimately needed to *make* a request, so their presence proves nothing
       # either way. What must never appear is the act of binding a socket.
       - name: The agent opens no listening socket

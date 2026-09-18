@@ -32,6 +32,10 @@ param(
     # Install a binary you already have, instead of downloading one.
     [string]$From,
 
+    # Also report the busiest processes by name. Program names only — never their arguments, which
+    # routinely carry credentials and are a separate setting for exactly that reason.
+    [switch]$Processes,
+
     # Remove the agent, its task, its config and its data.
     [switch]$Uninstall
 )
@@ -139,8 +143,12 @@ try {
     Copy-Item $staged $BinPath -Force
     Write-Step "installed to $BinPath"
 
-    "INFRANEST_TOKEN=$Token`r`nINFRANEST_URL=$Url`r`n" |
-        Set-Content -Path $ConfPath -Encoding ASCII -NoNewline
+    # Written at install time because the agent reads its configuration once, at startup: turning this on
+    # afterwards means editing this file and restarting the task, and install is the only moment it costs
+    # a switch.
+    $conf = "INFRANEST_TOKEN=$Token`r`nINFRANEST_URL=$Url`r`n"
+    if ($Processes) { $conf += "INFRANEST_PROCESSES=1`r`n" }
+    $conf | Set-Content -Path $ConfPath -Encoding ASCII -NoNewline
 
     # The config holds a credential, so only Administrators and SYSTEM may read it. Inheritance is
     # disabled first, or the permissive defaults on ProgramData survive everything set afterwards.

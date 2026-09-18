@@ -23,6 +23,9 @@ TOKEN_FILE=""
 API_URL="https://ingest.infranest.io"
 FROM_FILE=""
 DO_UNINSTALL=0
+# Off unless asked for. The InfraNest UI offers this as an unticked box beside the command, because
+# turning it on is a decision about what leaves the machine, not a default somebody should discover.
+PROCESSES=0
 
 usage() {
   cat <<'USAGE'
@@ -36,6 +39,7 @@ Options:
   --url <url>            where to send readings (default: https://ingest.infranest.io)
   --version <version>    install a specific version instead of the latest
   --from <path>          install a binary you already have, instead of downloading one
+  --processes            also report the busiest processes by name (program name only, never arguments)
   --uninstall            remove the agent, its user, its config and its data
   --help                 show this
 
@@ -58,6 +62,7 @@ while [ $# -gt 0 ]; do
     --url)        need_value "$@"; API_URL="$2"; shift 2 ;;
     --version)    need_value "$@"; VERSION="$2"; shift 2 ;;
     --from)       need_value "$@"; FROM_FILE="$2"; shift 2 ;;
+    --processes)  PROCESSES=1; shift ;;
     --uninstall)  DO_UNINSTALL=1; shift ;;
     --help|-h)    usage; exit 0 ;;
     *)            die "unknown option: $1 (try --help)" ;;
@@ -169,6 +174,15 @@ chmod 0750 "$STATE_DIR"
 # The token goes in a file the agent user can read and nobody else can — never into the unit file, which
 # `systemctl show` prints to any local user.
 umask 077
+
+# Written at install time because the agent reads its configuration once, at startup: turning this on
+# afterwards means editing the file and restarting the service, and install is the only moment it costs a
+# flag. Left commented out when it was not asked for, so the file still documents the setting.
+if [ "$PROCESSES" -eq 1 ]; then
+  PROCESSES_LINE="INFRANEST_PROCESSES=1"
+else
+  PROCESSES_LINE="#INFRANEST_PROCESSES=1"
+fi
 cat > "${CONF_DIR}/agent.conf" <<CONF
 # InfraNest agent configuration.
 #
@@ -195,7 +209,7 @@ INFRANEST_URL=${API_URL}
 
 # The busiest few processes, by memory. Off by default: full command lines routinely carry credentials,
 # and INFRANEST_PROCESS_ARGS is a second, separate decision for exactly that reason.
-#INFRANEST_PROCESSES=1
+${PROCESSES_LINE}
 #INFRANEST_PROCESS_ARGS=1
 
 # systemd units that were set up to run, and which have failed. On by default — it carries no command
