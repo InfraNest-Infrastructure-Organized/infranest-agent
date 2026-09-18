@@ -178,6 +178,16 @@ sudo sh install.sh --uninstall        # Linux
 .\install.ps1 -Uninstall              # Windows
 ```
 
+If you no longer have the installer — you piped it, or deleted it afterwards — the agent itself prints the
+removal commands for that machine, filled in:
+
+```sh
+sudo infranest-agent uninstall
+```
+
+It prints them rather than running them: stopping a unit and deleting a user are subprocesses, and this
+agent starts none.
+
 ### Reporting processes
 
 Off unless you ask for it, because it changes what leaves the machine. Ask at install time:
