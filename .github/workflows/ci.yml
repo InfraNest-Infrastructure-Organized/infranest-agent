@@ -113,6 +113,57 @@ jobs:
           grep -qx 'NoNewPrivileges=yes' /tmp/embedded.service \
             || { echo "::error::the embedded unit lost NoNewPrivileges"; exit 1; }
 
+      # The advice the installer prints has to be runnable, and under `curl | sh` — the documented way to
+      # install — `$0` is `sh`, so anything built from it reads `sh sh`. That shipped in v0.9.0: the closing
+      # hint told people to run `sudo sh sh --uninstall`. Nothing failed; the reader was simply handed
+      # something that is not a command, which is the kind of bug only a real install finds.
+      #
+      # Rendered rather than grepped: `sudo sh $0` is correct when the script *is* a file, so its presence
+      # proves nothing either way. What matters is what each caller is told.
+      - name: The installer's advice works whether it was piped or run as a file
+        run: |
+          # Everything the installer prints as advice, rendered the way a piped install sees it: `$0` is `sh`.
+          # Lifted out of install.sh rather than restated, so the check cannot pass while the installer is wrong.
+          helper=$(sed -n '/^invoked_as_a_file() /p' install.sh)
+          [ -n "$helper" ] || { echo "::error::install.sh has no invoked_as_a_file helper"; exit 1; }
+
+          hint=$(sed -n '/^echo "Remove it completely:"$/,/^fi$/p' install.sh)
+          [ -n "$hint" ] || { echo "::error::could not find the uninstall hint"; exit 1; }
+
+          out=$(printf 'BIN_DIR=/usr/local/bin\n%s\n%s\n' "$helper" "$hint" | sh -s)
+
+          # The symptom, exactly: `$0` is `sh` under a pipe, so anything built from it reads `sh sh`.
+          case "$out" in
+            *"sh sh"*) echo "::error::the uninstall hint prints 'sh sh' under a pipe:"; echo "$out"; exit 1 ;;
+          esac
+          # And it must still name something that exists on the machine.
+          case "$out" in
+            *"/usr/local/bin/infranest-agent uninstall"*) ;;
+            *) echo "::error::piped, the hint should point at the installed binary:"; echo "$out"; exit 1 ;;
+          esac
+
+          # Run as a file, the one-command path is kept.
+          printf 'BIN_DIR=/usr/local/bin\n%s\n%s\n' "$helper" "$hint" > /tmp/hintfile.sh
+          file_out=$(sh /tmp/hintfile.sh)
+          case "$file_out" in
+            *"--uninstall"*) ;;
+            *) echo "::error::run as a file, the hint should offer the installer's own --uninstall:"; echo "$file_out"; exit 1 ;;
+          esac
+
+          # The root message has the same trap, and it is the first thing a non-root reader sees. Rendered rather
+          # than grepped: `sudo sh $0` is correct when the script is a file, so its presence proves nothing either
+          # way — what matters is what a piped reader is told.
+          root=$(sed -n '/^if \[ "\$(id -u)" -ne 0 \]; then$/,/^fi$/p' install.sh)
+          [ -n "$root" ] || { echo "::error::could not find the root check"; exit 1; }
+
+          root_out=$(printf '%s\nid() { echo 1; }\ndie() { printf "%%s\\n" "$*"; }\n%s\n' "$helper" "$root" | sh -s)
+          case "$root_out" in
+            *"sh sh"*) echo "::error::the root message prints 'sh sh' under a pipe:"; echo "$root_out"; exit 1 ;;
+          esac
+          [ -n "$root_out" ] || { echo "::error::the root check said nothing"; exit 1; }
+
+          echo "the installer's advice is runnable whether it was piped or run as a file"
+
       # `--processes` decides what leaves a customer's machine, so both directions are asserted: asked for,
       # it must actually be written; not asked for, it must stay commented out. Neither is visible until
       # somebody installs an agent and looks at what arrived, which is far too late to notice.

@@ -55,6 +55,12 @@ die()  { printf '\nerror: %s\n' "$*" >&2; exit 1; }
 # all — so `--token` with a forgotten value looked like a silent crash rather than a missing value.
 need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 
+# `$0` is this script's path only when it was *run* as a file. Under `curl | sh` — the documented way to
+# install — it is `sh`, so anything built from it reads `sh sh`, which is not a command. The same trap
+# already cost us the systemd unit (see below); it survived in the two places that print advice, where
+# nothing fails and the reader is simply given something that does not work.
+invoked_as_a_file() { [ -f "$0" ] && [ -r "$0" ]; }
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --token)      need_value "$@"; TOKEN="$2"; shift 2 ;;
@@ -69,7 +75,14 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ "$(id -u)" -eq 0 ] || die "this needs root, to create a system user and a service. Try: sudo sh $0 ..."
+if [ "$(id -u)" -ne 0 ]; then
+  if invoked_as_a_file; then
+    die "this needs root, to create a system user and a service. Try: sudo sh $0 ..."
+  fi
+  # Piped: there is no path to hand back, and the reader's own command is the only thing that can be
+  # re-run. Saying so beats naming a file that does not exist.
+  die "this needs root, to create a system user and a service. Re-run your install command with sudo."
+fi
 
 # ── Uninstall ────────────────────────────────────────────────────────────────────────────────────────
 if [ "$DO_UNINSTALL" -eq 1 ]; then
@@ -372,5 +385,11 @@ echo "Check it is working:"
 echo "    sudo ${BIN_DIR}/infranest-agent status"
 echo
 echo "Remove it completely:"
-echo "    sudo sh $0 --uninstall"
+if invoked_as_a_file; then
+  echo "    sudo sh $0 --uninstall"
+else
+  # Piped, so there is no script to point at. The binary is at a known path and prints the exact
+  # commands for this machine — it cannot run them itself, because it starts no subprocesses.
+  echo "    sudo ${BIN_DIR}/infranest-agent uninstall     # prints the commands to run"
+fi
 echo
