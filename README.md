@@ -178,6 +178,31 @@ sudo sh install.sh --uninstall        # Linux
 .\install.ps1 -Uninstall              # Windows
 ```
 
+### Reporting processes
+
+Off unless you ask for it, because it changes what leaves the machine. Ask at install time:
+
+```sh
+sudo sh install.sh --token sat_YOUR_TOKEN --processes
+```
+
+```powershell
+.\install.ps1 -Token sat_YOUR_TOKEN -Processes
+```
+
+What gets sent is the **program name** — `nginx`, `postgres` — never what came after it. Arguments are a
+second, separate decision (`INFRANEST_PROCESS_ARGS`), because command lines routinely carry credentials,
+and one flag must never grant both.
+
+Install time is when this costs a flag rather than a procedure: the agent reads its configuration once, at
+startup, so turning it on later means editing `/etc/infranest/agent.conf` (or `%ProgramData%\InfraNest\agent.conf`)
+and restarting the service:
+
+```sh
+sudo sed -i 's/^#INFRANEST_PROCESSES=1/INFRANEST_PROCESSES=1/' /etc/infranest/agent.conf
+sudo systemctl restart infranest-agent
+```
+
 ### Keeping the token out of your shell history
 
 The token is a credential, and a command line ends up in `~/.bash_history` and is visible in `ps` while it
