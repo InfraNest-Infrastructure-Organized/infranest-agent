@@ -52,6 +52,60 @@ $TaskName    = 'InfraNest agent'
 function Write-Step { param($m) Write-Host "  $m" }
 function Write-Warn { param($m) Write-Warning $m }
 
+# ── Where releases come from ─────────────────────────────────────────────────────────────────────────
+# Our download host first, GitHub second — the same order and the same reasons as install.sh: GitHub has
+# no IPv6 address, get.infranest.io passes the very same release assets through over both families, and
+# some networks allow only github.com. Both serve `/releases/download/<tag>/<file>` from one release.
+$script:Sources = @('https://get.infranest.io', "https://github.com/$Repo")
+
+# Try this source first from now on, so a source that just timed out is not waited on again per file.
+function Use-Source { param($src) $script:Sources = @($src) + @($script:Sources | Where-Object { $_ -ne $src }) }
+
+# Pin `latest` to one tag before downloading anything. The binary and its checksum are two requests, and
+# two `latest` requests either side of a release would fail the checksum in a way that reads as tampering.
+function Resolve-Version {
+    if ($Version -ne 'latest') { return $Version }
+    $tag = ''
+    try {
+        $tag = [string](Invoke-WebRequest -Uri 'https://get.infranest.io/releases/latest' -UseBasicParsing -TimeoutSec 30).Content
+        $tag = $tag.Trim()
+    } catch { $tag = '' }
+    if ($tag -notmatch '^v\d+\.\d+\.\d+') {
+        # GitHub answers `releases/latest` with a redirect to `.../releases/tag/<tag>`. Read it without
+        # following it — HttpWebRequest because Invoke-WebRequest treats an unfollowed redirect as an
+        # error on 5.1 and 7 in different ways.
+        try {
+            $req = [Net.HttpWebRequest]::Create("https://github.com/$Repo/releases/latest")
+            $req.AllowAutoRedirect = $false
+            $req.Timeout = 30000
+            $res = $req.GetResponse()
+            $tag = ([string]$res.Headers['Location'] -split '/releases/tag/')[-1]
+            $res.Close()
+        } catch { $tag = '' }
+        if ($tag -match '^v\d+\.\d+\.\d+') { Use-Source "https://github.com/$Repo" }
+    }
+    if ($tag -notmatch '^v\d+\.\d+\.\d+') {
+        throw 'Could not find the latest release: neither get.infranest.io nor github.com answered.'
+    }
+    return $tag
+}
+
+# One release asset, from the first source that can serve it. Falls through ONLY on a failed download;
+# a checksum mismatch afterwards stops the install and is never retried elsewhere.
+function Save-Asset {
+    param($file, $dest)
+    foreach ($src in $script:Sources) {
+        try {
+            Invoke-WebRequest -Uri "$src/releases/download/$Version/$file" -OutFile $dest -UseBasicParsing -TimeoutSec 300
+            Use-Source $src
+            return
+        } catch {
+            Write-Warn "could not download $file from $($src -replace '/InfraNest-.*$', ''), trying the next source"
+        }
+    }
+    throw "Download failed. Check that release $Version exists: https://github.com/$Repo/releases"
+}
+
 # Creating a service and writing under Program Files both need it, and refusing early is kinder than
 # failing halfway through.
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -114,22 +168,20 @@ try {
         Write-Step "using $From"
     }
     else {
-        $base = if ($Version -eq 'latest') {
-            "https://github.com/$Repo/releases/latest/download"
-        } else {
-            "https://github.com/$Repo/releases/download/$Version"
-        }
-        $name = "infranest-agent_windows_$arch.exe"
-
-        Write-Step "downloading $name"
         # TLS 1.2 explicitly: Windows PowerShell 5.1 still defaults to older protocols on some builds, and
         # the download simply fails with a confusing error rather than saying why.
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri "$base/$name" -OutFile $staged -UseBasicParsing
+
+        $Version = Resolve-Version
+        Write-Step "release $Version"
+        $name = "infranest-agent_windows_$arch.exe"
+
+        Write-Step "downloading $name"
+        Save-Asset $name $staged
 
         Write-Step 'verifying the checksum'
         $sumFile = Join-Path $tmp 'sha256'
-        Invoke-WebRequest -Uri "$base/$name.sha256" -OutFile $sumFile -UseBasicParsing
+        Save-Asset "$name.sha256" $sumFile
 
         $expected = ((Get-Content $sumFile -Raw).Trim() -split '\s+')[0]
         $actual   = (Get-FileHash $staged -Algorithm SHA256).Hash.ToLower()

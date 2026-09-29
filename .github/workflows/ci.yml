@@ -62,6 +62,39 @@ jobs:
             GOOS=$os go vet ./... || { echo "::error::vet failed for $os"; exit 1; }
           done
 
+  installer-sources:
+    name: The installer reaches a release by either route
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # install.sh downloads from get.infranest.io first and GitHub second (#1791): GitHub has no IPv6
+      # address, and some networks allow only github.com. A fallback nobody exercises is a fallback that
+      # has quietly stopped working, so each route is taken for real here, with the other one blackholed
+      # (192.0.2.1 is TEST-NET-1: routed nowhere, so the connection times out exactly as a blocked host
+      # does). It installs the current published release, so a red run here is either this script or
+      # the release — both worth knowing.
+      #
+      # Real installs in a throwaway container, not a lifted snippet: the property is "an install
+      # completes", and only an install can show it.
+      - name: Install with each source blocked in turn, and a pinned version
+        run: |
+          run() {
+            label="$1"; shift
+            echo "── $label"
+            out=$(docker run --rm -v "$PWD/install.sh:/install.sh:ro" "$@" debian:stable-slim sh -c '
+              apt-get update -qq >/dev/null && apt-get install -y -qq curl ca-certificates >/dev/null &&
+              sh /install.sh --token sat_ci $VERSION_ARG && test -x /usr/local/bin/infranest-agent' 2>&1) \
+              || { echo "$out"; echo "::error::install failed: $label"; exit 1; }
+            echo "$out" | grep -E '^  (release|!)' || true
+          }
+          run "both reachable"
+          run "get.infranest.io blocked" --add-host get.infranest.io:192.0.2.1
+          run "github.com blocked" --add-host github.com:192.0.2.1 \
+            --add-host release-assets.githubusercontent.com:192.0.2.1
+          run "pinned version, get.infranest.io blocked" --add-host get.infranest.io:192.0.2.1 \
+            -e VERSION_ARG="--version v0.9.0"
+
   invariant:
     name: It only sends
     runs-on: ubuntu-latest

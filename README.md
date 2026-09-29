@@ -104,14 +104,18 @@ and choose **Install agent**. It gives you a line to copy that already has the t
 ### Linux
 
 ```sh
-curl -fsSL https://github.com/InfraNest-Infrastructure-Organized/infranest-agent/releases/latest/download/install.sh \
-  | sudo sh -s -- --token sat_YOUR_TOKEN
+curl -fsSL https://get.infranest.io/agent.sh | sudo sh -s -- --token sat_YOUR_TOKEN
 ```
+
+`get.infranest.io` serves this repository's releases, unchanged, over IPv4 **and IPv6** — GitHub has no
+IPv6 address, so a server with only IPv6 cannot download from it directly. The installer fetches the
+binary from there too, and falls back to GitHub if it cannot reach it. Either way it checks the binary
+against the checksum published with the release before installing anything.
 
 Prefer not to pipe a script into a shell? That is a reasonable position — download it, read it, then run it:
 
 ```sh
-curl -fsSLO https://github.com/InfraNest-Infrastructure-Organized/infranest-agent/releases/latest/download/install.sh
+curl -fsSL -o install.sh https://get.infranest.io/agent.sh
 sha256sum install.sh                # compare with the checksum InfraNest shows beside the command
 less install.sh                     # it is about 200 lines
 sudo sh install.sh --token sat_YOUR_TOKEN
@@ -122,7 +126,7 @@ sudo sh install.sh --token sat_YOUR_TOKEN
 In PowerShell, **as administrator**:
 
 ```powershell
-irm https://github.com/InfraNest-Infrastructure-Organized/infranest-agent/releases/latest/download/install.ps1 -OutFile install.ps1
+irm https://get.infranest.io/agent.ps1 -OutFile install.ps1
 Get-FileHash install.ps1 -Algorithm SHA256   # compare with the checksum InfraNest shows
 .\install.ps1 -Token sat_YOUR_TOKEN
 ```
