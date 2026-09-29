@@ -51,6 +51,59 @@ log()  { printf '  %s\n' "$*"; }
 warn() { printf '  ! %s\n' "$*" >&2; }
 die()  { printf '\nerror: %s\n' "$*" >&2; exit 1; }
 
+# ── Where releases come from ─────────────────────────────────────────────────────────────────────────
+# Our download host first, GitHub second. GitHub publishes no IPv6 address for any host a release download
+# touches, so on a machine with only IPv6 it cannot be reached at all; get.infranest.io passes the very
+# same release assets through over both families. It is a pass-through, not a copy: both sources serve
+# `/releases/download/<tag>/<file>` from one GitHub release, so the checksum means the same either way.
+#
+# GitHub stays as the fallback because the reverse also happens — a network that allows github.com and
+# blocks everything else is common behind corporate proxies.
+SOURCES="https://get.infranest.io https://github.com/${REPO}"
+
+# Pin `latest` to one tag before downloading anything. The binary and its checksum are two requests; if
+# they each asked for `latest` and a release landed between them, they would come from different releases
+# and fail the checksum — a failure that reads exactly like tampering.
+resolve_version() {
+  [ "$VERSION" = "latest" ] || return 0
+  tag="$(curl -fsS --connect-timeout 10 --max-time 30 "https://get.infranest.io/releases/latest" 2>/dev/null \
+         | tr -d '[:space:]')" || tag=""
+  if ! is_tag "$tag"; then
+    # GitHub answers `releases/latest` with a redirect to `…/releases/tag/<tag>`; read the tag from it
+    # without following it.
+    tag="$(curl -fsS --connect-timeout 10 --max-time 30 -o /dev/null -w '%{redirect_url}' \
+             "https://github.com/${REPO}/releases/latest" 2>/dev/null)" || tag=""
+    tag="${tag##*/releases/tag/}"
+    is_tag "$tag" && prefer "https://github.com/${REPO}"
+  fi
+  is_tag "$tag" || die "could not find the latest release — neither get.infranest.io nor github.com answered"
+  VERSION="$tag"
+}
+
+# Try this source first from now on. A source that just timed out would otherwise cost the same 10 seconds
+# again for every file still to come.
+prefer() {
+  rest=""
+  for s in $SOURCES; do [ "$s" = "$1" ] || rest="$rest $s"; done
+  SOURCES="$1$rest"
+}
+
+is_tag() { case "$1" in v[0-9]*.[0-9]*.[0-9]*) return 0 ;; *) return 1 ;; esac; }
+
+# One release asset, from the first source that can serve it. Falls through ONLY on a failed download:
+# a file that arrives and then fails the checksum stops the install, and is never retried elsewhere — the
+# checksum refusing is the check working, not a network problem.
+fetch() {
+  for src in $SOURCES; do
+    if curl -fsSL --connect-timeout 10 "${src}/releases/download/${VERSION}/$1" -o "$2"; then
+      prefer "$src"
+      return 0
+    fi
+    warn "could not download $1 from ${src%%/InfraNest-*}, trying the next source"
+  done
+  return 1
+}
+
 # `shift 2` with only one argument left exits the shell immediately under `set -e`, with no output at
 # all — so `--token` with a forgotten value looked like a silent crash rather than a missing value.
 need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
@@ -138,18 +191,14 @@ if [ -n "$FROM_FILE" ]; then
 else
   command -v curl >/dev/null 2>&1 || die "curl is required to download the agent"
 
-  base="https://github.com/${REPO}/releases"
-  if [ "$VERSION" = "latest" ]; then
-    base="${base}/latest/download"
-  else
-    base="${base}/download/${VERSION}"
-  fi
+  resolve_version
+  log "release ${VERSION}"
 
   name="infranest-agent_linux_${arch}"
   log "downloading ${name}"
-  curl -fsSL "${base}/${name}" -o "$tmp/infranest-agent" \
-    || die "download failed. If this is a new install, check that a release exists at ${base}"
-  curl -fsSL "${base}/${name}.sha256" -o "$tmp/sha256" \
+  fetch "$name" "$tmp/infranest-agent" \
+    || die "download failed. Check that release ${VERSION} exists: https://github.com/${REPO}/releases"
+  fetch "${name}.sha256" "$tmp/sha256" \
     || die "could not download the checksum — refusing to install something unverified"
 
   log "verifying the checksum"
