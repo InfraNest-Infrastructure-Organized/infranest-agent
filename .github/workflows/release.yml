@@ -157,9 +157,25 @@ jobs:
       # It proves *who built this*. It does not prove the source is good — the reproducible build above
       # is what answers that, and it needs no third party at all. The release notes say so in that order.
       - name: Attest what was built
+        id: attest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: 'dist/infranest-agent_*'
+
+      # The same attestation, published as a release asset (InfraNest#2361). The installers verify it when
+      # gh or cosign is present, and a file beside the binary is something they can fetch from either
+      # download source with no GitHub login: GitHub's attestation API needs none to *read*, but it has
+      # no IPv6 address, and `gh attestation verify` without `--bundle` insists on a login even then.
+      # One bundle covers every artefact above, so it is one file, not twelve.
+      #
+      # Not added to SHA256SUMS: it is signed by Sigstore, and a checksum from the same place would add
+      # nothing. It cannot be forged by whoever serves it, only withheld.
+      - name: Publish the attestation beside the binaries
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          test -s "$BUNDLE" || { echo "::error::the attest step produced no bundle"; exit 1; }
+          cp "$BUNDLE" dist/infranest-agent.sigstore.json
 
       - name: Publish
         env:
