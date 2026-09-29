@@ -65,6 +65,14 @@ jobs:
   installer-sources:
     name: The installer reaches a release by either route
     runs-on: ubuntu-latest
+    # Wider than the workflow's default for one reason: the attestation check below needs a bundle that is
+    # genuinely signed and still not ours to accept, and the only way to have one is for this workflow to
+    # sign it. `id-token` gets the short-lived certificate; `attestations` is where the action records it.
+    # Nothing in this job writes to the repository.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -102,9 +110,36 @@ jobs:
       #
       # v0.9.1 predates the attestation being published as a release asset, so its bundle is read from
       # GitHub's attestation API here, which is the same bundle byte for byte.
+      #
+      # The pin, tried rather than read (InfraNest#2361). The tampered case has no attestation for its
+      # bytes at all, so it would be refused by an installer that accepted *any* signature. What the pin
+      # is for is a binary that IS properly attested, by a workflow that is not release.yml: any workflow
+      # in this repository can obtain a certificate, and only one of them builds releases. So this one
+      # signs a binary here, with the same action release.yml uses, and the installer has to refuse it.
+      # Signed, not just built: the bytes are a real release binary with a marker appended, so they run
+      # and have a digest of their own, and no attestation for a real release is ever made by ci.yml.
+      #
+      # A pull request from a fork gets no id-token, so it cannot sign and these cases are skipped there,
+      # with a notice. Every other run exercises them.
+      - name: Make a binary, signed by this workflow
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          mkdir -p foreign
+          curl -fsSL -o foreign/infranest-agent_linux_amd64 \
+            https://github.com/InfraNest-Infrastructure-Organized/infranest-agent/releases/download/v0.9.1/infranest-agent_linux_amd64
+          printf 'signed by ci.yml' >> foreign/infranest-agent_linux_amd64
+
+      - name: Sign it with the action release.yml uses
+        id: foreign
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: foreign/infranest-agent_linux_amd64
+
       - name: A binary we did not build is refused when gh or cosign can check it
         env:
           GH_TOKEN: ${{ github.token }}
+          FOREIGN_BUNDLE: ${{ steps.foreign.outputs.bundle-path }}
         run: |
           set -eu
           R=InfraNest-Infrastructure-Organized/infranest-agent
@@ -126,7 +161,7 @@ jobs:
           grep -q '^SOURCES="http://127.0.0.1:8765"$' fixtures/install.sh || { echo "::error::could not repoint SOURCES"; exit 1; }
 
           check() {
-            label="$1" tree="$2" tool="$3" want="$4"
+            label="$1" tree="$2" tool="$3" want="$4" script="${5:-install.sh}"
             got=$(docker run --rm -v "$PWD/fixtures:/f:ro" -v "$(command -v gh):/host-gh:ro" debian:stable-slim sh -c "
               apt-get update -qq >/dev/null && apt-get install -y -qq curl ca-certificates python3 >/dev/null
               mkdir -p /tools
@@ -136,17 +171,45 @@ jobs:
               esac
               export PATH=/tools:\$PATH
               (cd /f/$tree && python3 -m http.server 8765 --bind 127.0.0.1 >/dev/null 2>&1 &) ; sleep 1
-              sh /f/install.sh --token sat_ci --version $V >/tmp/out 2>&1 || true
+              sh /f/$script --token sat_ci --version $V >/tmp/out 2>&1 || true
               grep -E '^  (verif|built|build)|^error' /tmp/out
               test -x /usr/local/bin/infranest-agent && echo INSTALLED || echo REFUSED")
             echo "── $label"; echo "$got"
             echo "$got" | tail -1 | grep -qx "$want" || { echo "::error::$label: expected $want"; exit 1; }
+            # A refusal has to be the attestation's doing. Anything else that stops an install — a download
+            # that failed, a missing file — also ends in REFUSED, and would pass here for the wrong reason.
+            if [ "$want" = REFUSED ] && [ "$tree" = foreign ]; then
+              echo "$got" | grep -q 'does not verify' || { echo "::error::$label: refused, but not by the attestation check"; exit 1; }
+            fi
           }
           check "genuine, gh"          genuine  gh     INSTALLED
           check "genuine, cosign"      genuine  cosign INSTALLED
           check "tampered, gh"         tampered gh     REFUSED
           check "tampered, cosign"     tampered cosign REFUSED
           check "genuine, no verifier" genuine  none   INSTALLED
+
+          if [ -z "${FOREIGN_BUNDLE:-}" ]; then
+            echo "::notice::the signed-by-another-workflow cases were skipped: a fork's pull request cannot sign"
+            exit 0
+          fi
+          d="fixtures/foreign/releases/download/$V"; mkdir -p "$d"
+          cp "foreign/$A" "$d/$A"
+          (cd "$d" && sha256sum "$A" > "$A.sha256")
+          cp "$FOREIGN_BUNDLE" "$d/infranest-agent.sigstore.json"
+
+          # The control. The same installer, pinned to ci.yml instead of release.yml, must ACCEPT this
+          # bundle — otherwise the refusals below could be the bundle being unreadable, or not matching the
+          # binary, rather than the pin. Only the two pin lines differ from the installer under test.
+          sed -e 's#^WORKFLOW=.*#WORKFLOW="${REPO}/.github/workflows/ci.yml"#' \
+              -e 's#^IDENTITY_RE=.*#IDENTITY_RE="^https://github\\.com/${REPO}/\\.github/workflows/ci\\.yml@"#' \
+              fixtures/install.sh > fixtures/install-pinned-to-ci.sh
+          [ "$(diff fixtures/install.sh fixtures/install-pinned-to-ci.sh | grep -c '^>')" -eq 2 ] \
+            || { echo "::error::could not repoint the pin for the control"; diff fixtures/install.sh fixtures/install-pinned-to-ci.sh; exit 1; }
+
+          check "signed by ci.yml, gh"                    foreign gh     REFUSED
+          check "signed by ci.yml, cosign"                foreign cosign REFUSED
+          check "control: pinned to ci.yml instead, gh"     foreign gh     INSTALLED install-pinned-to-ci.sh
+          check "control: pinned to ci.yml instead, cosign" foreign cosign INSTALLED install-pinned-to-ci.sh
 
   invariant:
     name: It only sends
