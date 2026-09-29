@@ -133,13 +133,19 @@ Get-FileHash install.ps1 -Algorithm SHA256   # compare with the checksum InfraNe
 
 ### Verifying a release before you install it
 
-The installer already refuses to install a binary whose checksum does not match. If you want to check
-more than that, each release carries a build attestation and is reproducible:
+The installer already refuses to install a binary whose checksum does not match. If `gh` or `cosign` is
+installed, it also checks the release's **build attestation** and refuses a binary our release workflow
+did not build — and when neither is installed it says, in one line, that it could not check.
+
+To do it by hand, each release carries the attestation (`infranest-agent.sigstore.json`) and is
+reproducible:
 
 ```sh
-# Who built it — which commit, which workflow, which runner.
+# Who built it — which commit, which workflow, which runner. No GitHub login needed with --bundle.
 gh attestation verify infranest-agent_linux_amd64 \
-  --repo InfraNest-Infrastructure-Organized/infranest-agent
+  --repo InfraNest-Infrastructure-Organized/infranest-agent \
+  --signer-workflow InfraNest-Infrastructure-Organized/infranest-agent/.github/workflows/release.yml \
+  --bundle infranest-agent.sigstore.json
 
 # What it is. Clone the tag, build it, compare the hash to SHA256SUMS.
 # This one needs no trust in us at all.
@@ -156,10 +162,12 @@ No surprises, in this order:
 
 1. Works out which build fits this machine
 2. Downloads it, and **checks the checksum** — if that does not match it stops and installs nothing
-3. Creates a user called `infranest-agent` with no login and no privileges (Windows: uses the built-in
+3. If `gh` or `cosign` is installed, **checks who built it** against the release's attestation — if that
+   fails it stops and installs nothing
+4. Creates a user called `infranest-agent` with no login and no privileges (Windows: uses the built-in
    `LOCAL SERVICE` account)
-4. Puts the token in a file only that user can read
-5. Starts it, and sets it to start again after a reboot
+5. Puts the token in a file only that user can read
+6. Starts it, and sets it to start again after a reboot
 
 It does not touch anything else, and it does not need to reach the internet again except to send readings.
 

@@ -104,6 +104,63 @@ fetch() {
   return 1
 }
 
+# ── Who built it ─────────────────────────────────────────────────────────────────────────────────────
+# The checksum only proves the download is intact: it comes from the same place as the binary, so anyone
+# who could replace one could replace both. Every release also carries a build attestation — signed with a
+# short-lived certificate issued to release.yml, recorded in a public transparency log — and that is what
+# says *who built these bytes*. It is checked here when a tool that can check it is already installed.
+#
+# The rule, and the reason for each half:
+#   - verification FAILS  → stop. A tool that can check and says no is not something to install past.
+#   - it CANNOT be checked (no gh/cosign, or no attestation to be had) → say so in one line and carry on.
+#     A fresh server has neither tool, and refusing there would fail the install for almost everyone.
+#
+# Pinned to release.yml, not merely to this repository: any workflow here could obtain a certificate, and
+# only one of them builds releases. The attestation cannot be forged by whoever serves the download — it is
+# signed by Sigstore, not by us — so its only weakness is being withheld, which is why it is fetched from
+# either source like everything else.
+WORKFLOW="${REPO}/.github/workflows/release.yml"
+IDENTITY_RE="^https://github\.com/${REPO}/\.github/workflows/release\.yml@refs/tags/v"
+ATTESTATION="infranest-agent.sigstore.json"
+
+verify_provenance() {
+  bin="$1" bundle="$tmp/attestation.json"
+
+  have_bundle=0
+  # Only a downloaded release has a known tag to fetch the attestation for. A `--from` binary is looked up
+  # by its digest instead, which only an authenticated gh can do.
+  if [ -z "$FROM_FILE" ] && fetch "$ATTESTATION" "$bundle" 2>/dev/null; then
+    have_bundle=1
+  fi
+
+  if command -v gh >/dev/null 2>&1 && { [ "$have_bundle" -eq 1 ] || gh auth status >/dev/null 2>&1; }; then
+    set -- gh attestation verify "$bin" --repo "$REPO" --signer-workflow "$WORKFLOW"
+    [ "$have_bundle" -eq 1 ] && set -- "$@" --bundle "$bundle"
+  elif command -v cosign >/dev/null 2>&1 && [ "$have_bundle" -eq 1 ]; then
+    # --new-bundle-format: the attestation is a v0.3 Sigstore bundle, which cosign before 3.0 only reads
+    # when told to (2.4+), and 3.x accepts the flag with a deprecation notice.
+    set -- cosign verify-blob-attestation --bundle "$bundle" --new-bundle-format --type slsaprovenance1 \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      --certificate-identity-regexp "$IDENTITY_RE" "$bin"
+  else
+    if ! command -v gh >/dev/null 2>&1 && ! command -v cosign >/dev/null 2>&1; then
+      log "build provenance not checked: neither gh nor cosign is installed (the checksum was)"
+    elif [ -n "$FROM_FILE" ]; then
+      log "build provenance not checked: no attestation to look up for a --from binary without a logged-in gh"
+    else
+      warn "build provenance not checked: release ${VERSION} has no attestation file to verify against"
+    fi
+    return 0
+  fi
+
+  log "verifying who built it ($1)"
+  if ! out="$("$@" 2>&1)"; then
+    printf '%s\n' "$out" | sed 's/^/    /' >&2
+    die "the build attestation does not verify. Not installing. This binary was not built by ${WORKFLOW}."
+  fi
+  log "built by ${WORKFLOW}"
+}
+
 # `shift 2` with only one argument left exits the shell immediately under `set -e`, with no output at
 # all — so `--token` with a forgotten value looked like a silent crash rather than a missing value.
 need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
@@ -212,6 +269,8 @@ else
   fi
   [ "$expected" = "$actual" ] || die "checksum mismatch. Not installing. Expected $expected, got $actual"
 fi
+
+verify_provenance "$tmp/infranest-agent"
 
 # ── The unprivileged user ────────────────────────────────────────────────────────────────────────────
 if ! id "$USER_NAME" >/dev/null 2>&1; then

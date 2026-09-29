@@ -95,6 +95,59 @@ jobs:
           run "pinned version, get.infranest.io blocked" --add-host get.infranest.io:192.0.2.1 \
             -e VERSION_ARG="--version v0.9.0"
 
+      # The build-attestation check (InfraNest#2361), end to end: the real installer, a real release's
+      # binary and its real attestation, served from a stand-in download host so the one thing CI cannot
+      # get from a genuine release — a binary that is NOT ours, with a checksum that matches it — can be
+      # served too. The tampered case is the whole point: the checksum alone installs it happily.
+      #
+      # v0.9.1 predates the attestation being published as a release asset, so its bundle is read from
+      # GitHub's attestation API here, which is the same bundle byte for byte.
+      - name: A binary we did not build is refused when gh or cosign can check it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          R=InfraNest-Infrastructure-Organized/infranest-agent
+          V=v0.9.1
+          A=infranest-agent_linux_amd64
+          for tree in genuine tampered; do
+            d="fixtures/$tree/releases/download/$V"; mkdir -p "$d"
+            curl -fsSL -o "$d/$A" "https://github.com/$R/releases/download/$V/$A"
+          done
+          printf 'x' >> "fixtures/tampered/releases/download/$V/$A"
+          digest=$(sha256sum "fixtures/genuine/releases/download/$V/$A" | cut -d' ' -f1)
+          gh api "repos/$R/attestations/sha256:$digest" --jq '.attestations[0].bundle' > bundle.json
+          for tree in genuine tampered; do
+            d="fixtures/$tree/releases/download/$V"
+            (cd "$d" && sha256sum "$A" > "$A.sha256")
+            cp bundle.json "$d/infranest-agent.sigstore.json"
+          done
+          sed 's#^SOURCES=.*#SOURCES="http://127.0.0.1:8765"#' install.sh > fixtures/install.sh
+          grep -q '^SOURCES="http://127.0.0.1:8765"$' fixtures/install.sh || { echo "::error::could not repoint SOURCES"; exit 1; }
+
+          check() {
+            label="$1" tree="$2" tool="$3" want="$4"
+            got=$(docker run --rm -v "$PWD/fixtures:/f:ro" -v "$(command -v gh):/host-gh:ro" debian:stable-slim sh -c "
+              apt-get update -qq >/dev/null && apt-get install -y -qq curl ca-certificates python3 >/dev/null
+              mkdir -p /tools
+              case $tool in
+                gh)     cp /host-gh /tools/gh ;;
+                cosign) curl -fsSL -o /tools/cosign https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64 && chmod +x /tools/cosign ;;
+              esac
+              export PATH=/tools:\$PATH
+              (cd /f/$tree && python3 -m http.server 8765 --bind 127.0.0.1 >/dev/null 2>&1 &) ; sleep 1
+              sh /f/install.sh --token sat_ci --version $V >/tmp/out 2>&1 || true
+              grep -E '^  (verif|built|build)|^error' /tmp/out
+              test -x /usr/local/bin/infranest-agent && echo INSTALLED || echo REFUSED")
+            echo "── $label"; echo "$got"
+            echo "$got" | tail -1 | grep -qx "$want" || { echo "::error::$label: expected $want"; exit 1; }
+          }
+          check "genuine, gh"          genuine  gh     INSTALLED
+          check "genuine, cosign"      genuine  cosign INSTALLED
+          check "tampered, gh"         tampered gh     REFUSED
+          check "tampered, cosign"     tampered cosign REFUSED
+          check "genuine, no verifier" genuine  none   INSTALLED
+
   invariant:
     name: It only sends
     runs-on: ubuntu-latest

@@ -106,6 +106,56 @@ function Save-Asset {
     throw "Download failed. Check that release $Version exists: https://github.com/$Repo/releases"
 }
 
+# ── Who built it ─────────────────────────────────────────────────────────────────────────────────────
+# The same rule as install.sh, for the same reasons: the checksum comes from the same place as the binary,
+# so the build attestation is what says who built it. Checked when gh or cosign is already installed,
+# pinned to release.yml. Verification failing stops the install; being unable to check says so and goes on.
+$Workflow    = "$Repo/.github/workflows/release.yml"
+$IdentityRe  = "^https://github\.com/$Repo/\.github/workflows/release\.yml@refs/tags/v"
+$Attestation = 'infranest-agent.sigstore.json'
+
+function Test-Provenance {
+    param($bin)
+    $bundle = Join-Path $tmp 'attestation.json'
+    $haveBundle = $false
+    if (-not $From) {
+        try { Save-Asset $Attestation $bundle 3>$null; $haveBundle = $true } catch { }
+    }
+
+    $gh = Get-Command gh -ErrorAction SilentlyContinue
+    $cosign = Get-Command cosign -ErrorAction SilentlyContinue
+    $ghAuthed = $false
+    if ($gh -and -not $haveBundle) { & gh auth status *> $null; $ghAuthed = ($LASTEXITCODE -eq 0) }
+
+    if ($gh -and ($haveBundle -or $ghAuthed)) {
+        $tool = 'gh'
+        $argv = @('attestation', 'verify', $bin, '--repo', $Repo, '--signer-workflow', $Workflow)
+        if ($haveBundle) { $argv += @('--bundle', $bundle) }
+    } elseif ($cosign -and $haveBundle) {
+        $tool = 'cosign'
+        $argv = @('verify-blob-attestation', '--bundle', $bundle, '--new-bundle-format', '--type', 'slsaprovenance1',
+                  '--certificate-oidc-issuer', 'https://token.actions.githubusercontent.com',
+                  '--certificate-identity-regexp', $IdentityRe, $bin)
+    } else {
+        if (-not $gh -and -not $cosign) {
+            Write-Step 'build provenance not checked: neither gh nor cosign is installed (the checksum was)'
+        } elseif ($From) {
+            Write-Step 'build provenance not checked: no attestation to look up for a -From binary without a logged-in gh'
+        } else {
+            Write-Warn "build provenance not checked: release $Version has no attestation file to verify against"
+        }
+        return
+    }
+
+    Write-Step "verifying who built it ($tool)"
+    $out = & $tool @argv 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $out | ForEach-Object { Write-Host "    $_" }
+        throw "The build attestation does not verify. Not installing. This binary was not built by $Workflow."
+    }
+    Write-Step "built by $Workflow"
+}
+
 # Creating a service and writing under Program Files both need it, and refusing early is kinder than
 # failing halfway through.
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -189,6 +239,8 @@ try {
             throw "Checksum mismatch. Not installing. Expected $expected, got $actual"
         }
     }
+
+    Test-Provenance $staged
 
     # ── Files ────────────────────────────────────────────────────────────────────────────────────────
     New-Item -ItemType Directory -Path $InstallDir, $ConfDir -Force | Out-Null

@@ -14,8 +14,23 @@ binary and the checksum come from the same place, so anyone who could replace on
 
 ```
 gh attestation verify infranest-agent_linux_amd64 \
-  --repo InfraNest-Infrastructure-Organized/infranest-agent
+  --repo InfraNest-Infrastructure-Organized/infranest-agent \
+  --signer-workflow InfraNest-Infrastructure-Organized/infranest-agent/.github/workflows/release.yml \
+  --bundle infranest-agent.sigstore.json
 ```
+
+`--bundle` checks against the attestation published with this release and needs no GitHub login; leave it
+out and `gh` fetches the same attestation from GitHub, which does. With `cosign` instead:
+
+```
+cosign verify-blob-attestation --bundle infranest-agent.sigstore.json --new-bundle-format \
+  --type slsaprovenance1 --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/InfraNest-Infrastructure-Organized/infranest-agent/\.github/workflows/release\.yml@refs/tags/v' \
+  infranest-agent_linux_amd64
+```
+
+The installers run exactly this when either tool is already installed, and refuse to install a binary
+that fails it.
 
 Every artefact here carries a build attestation: which commit, which workflow, which runner. It is
 signed without a key — a short-lived certificate issued to this workflow and recorded in a public
