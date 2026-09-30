@@ -22,9 +22,11 @@ import (
 func Status(w io.Writer, cfg config.Config, now time.Time) {
 	state := LoadState(cfg.StateDir)
 
+	// Resolved exactly as the run loop resolves it, so this line names where readings are actually going
+	// rather than what happens to be in the state file.
 	url := cfg.PushURL()
-	if state.URL != "" {
-		url = state.URL
+	if adopted, ok := config.Adopt(url, state.URL); ok {
+		url = adopted
 	}
 
 	fmt.Fprintf(w, "Sending to:   %s\n", url)

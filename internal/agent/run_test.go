@@ -50,6 +50,14 @@ func (f *fakeSender) Send(_ context.Context, url string, samples []json.RawMessa
 func harness(t *testing.T, sender *fakeSender, ticks int) (*Runner, *strings.Builder, *[]time.Duration) {
 	t.Helper()
 
+	return harnessWith(t, sender, ticks, nil)
+}
+
+// harnessWith is harness with a moment before the loop starts, for a test about what an earlier run left
+// behind on disk.
+func harnessWith(t *testing.T, sender *fakeSender, ticks int, before func(*Runner)) (*Runner, *strings.Builder, *[]time.Duration) {
+	t.Helper()
+
 	dir := t.TempDir()
 	sp, err := spool.New(filepath.Join(dir, "spool"))
 	if err != nil {
@@ -86,6 +94,10 @@ func harness(t *testing.T, sender *fakeSender, ticks int) (*Runner, *strings.Bui
 		ch <- clock
 
 		return ch
+	}
+
+	if before != nil {
+		before(r)
 	}
 
 	if err := r.Run(ctx); err != nil {
@@ -172,12 +184,51 @@ func TestAMoveIsFollowedOnlyWithinOurOwnDomain(t *testing.T) {
 
 	r, _, _ := harness(t, sender, 4)
 
-	if len(sender.urls) < 2 || !strings.Contains(sender.urls[1], "ingest-eu.infranest.io") {
-		t.Fatalf("expected the second push to follow the move, got %v", sender.urls)
+	// The whole address, not merely the host (InfraNest#2462). This asserted `Contains("ingest-eu")`, and
+	// passed while the agent was following the move to the bare origin and posting to `/`.
+	const moved = "https://ingest-eu.infranest.io/api/metrics/push"
+	if len(sender.urls) < 2 || sender.urls[1] != moved {
+		t.Fatalf("expected the second push to go to %s, got %v", moved, sender.urls)
 	}
 	// Persisted, or every restart would quietly send the fleet back to whatever the installer wrote.
-	if !strings.Contains(LoadState(r.Config.StateDir).URL, "ingest-eu") {
-		t.Fatal("expected the new destination to survive a restart")
+	if got := LoadState(r.Config.StateDir).URL; got != moved {
+		t.Fatalf("expected %s to survive a restart, got %q", moved, got)
+	}
+}
+
+// The outage in InfraNest#2462, end to end: the server names the origin the agent is already using.
+// Nothing moves, and nothing is written that a restart would act on.
+func TestBeingOfferedTheHostAlreadyInUseChangesNothing(t *testing.T) {
+	sender := &fakeSender{answer: func(int) (push.Result, error) {
+		return push.Result{Accepted: 1, IngestURL: "https://ingest.infranest.io"}, nil
+	}}
+
+	r, _, _ := harness(t, sender, 4)
+
+	want := r.Config.PushURL()
+	for i, u := range sender.urls {
+		if u != want {
+			t.Fatalf("push %d went to %s, expected every push to stay on %s", i+1, u, want)
+		}
+	}
+	if got := LoadState(r.Config.StateDir).URL; got != "" && got != want {
+		t.Fatalf("the state file must not hold a bare origin, got %q", got)
+	}
+}
+
+// And the machines it already happened to: a state file holding the bare origin, from an agent that ran
+// before this fix. Starting up must send to the endpoint, not to what the file says.
+func TestABareOriginLeftInTheStateFileIsNotPostedTo(t *testing.T) {
+	sender := &fakeSender{answer: func(int) (push.Result, error) { return push.Result{Accepted: 1}, nil }}
+
+	r, _, _ := harnessWith(t, sender, 2, func(r *Runner) {
+		r.save(State{URL: strings.TrimSuffix(r.Config.PushURL(), "/api/metrics/push")})
+	})
+
+	for i, u := range sender.urls {
+		if u != r.Config.PushURL() {
+			t.Fatalf("push %d went to %s, expected %s", i+1, u, r.Config.PushURL())
+		}
 	}
 }
 

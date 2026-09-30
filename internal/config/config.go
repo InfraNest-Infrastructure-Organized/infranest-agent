@@ -149,11 +149,24 @@ func ValidateURL(raw string) error {
 // who can answer for `ingest.infranest.app` can already read that push; being able to move the agent to
 // `ingest-eu.infranest.app` gains them nothing they did not already have. Being able to move it to a host
 // they own would be a different thing entirely, and permanent.
+//
+// What comes back is always the push endpoint, whatever shape the offer had (InfraNest#2462). The server
+// named an *origin* — `https://ingest.infranest.io` — and this compared it, as a string, with the endpoint
+// the agent was posting to. They differed, so the origin was adopted as the endpoint: the agent posted to
+// `/`, was answered 405, and wrote the origin to its state file so a restart adopted it again. Naming the
+// host the fleet was already on stopped every agent, and none could be corrected, because the correction
+// arrives in the response to a push that succeeds. An origin and an endpoint now end up in the same
+// place, and an offer that names where the agent already sends is not a move at all.
 func Adopt(current, offered string) (string, bool) {
-	if offered == "" || offered == current {
+	if offered == "" {
 		return current, false
 	}
 	if err := ValidateURL(offered); err != nil {
+		return current, false
+	}
+
+	offered = PushEndpoint(offered)
+	if offered == current {
 		return current, false
 	}
 
@@ -197,7 +210,21 @@ func registrable(host string) string {
 // Derived rather than configured, so a base URL cannot be set to something that is *almost* right. A
 // trailing slash, a path, or a bare host all end up at the same place.
 func (c Config) PushURL() string {
-	return strings.TrimRight(c.URL, "/") + "/api/metrics/push"
+	return PushEndpoint(c.URL)
+}
+
+const pushPath = "/api/metrics/push"
+
+// PushEndpoint turns whatever names an InfraNest host into the address a reading is posted to.
+//
+// One function for the configured URL and for a destination the server offers, because the two were
+// derived differently and that was the whole of InfraNest#2462. A bare origin, one with a trailing slash,
+// and the endpoint itself are all the same destination; the last is what somebody pastes when they copy
+// the address out of a log, and appending the path to it again would be a 404 that reads as an outage.
+func PushEndpoint(base string) string {
+	base = strings.TrimSuffix(strings.TrimRight(base, "/"), pushPath)
+
+	return strings.TrimRight(base, "/") + pushPath
 }
 
 // falsey is truthy's opposite for a default-on setting: only an explicit no counts, so an unset variable
