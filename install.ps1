@@ -13,6 +13,9 @@
     .\install.ps1 -Token sat_xxxxx
 
 .EXAMPLE
+    .\install.ps1 -Upgrade
+
+.EXAMPLE
     .\install.ps1 -Uninstall
 #>
 [CmdletBinding()]
@@ -35,6 +38,10 @@ param(
     # Also report the busiest processes by name. Program names only — never their arguments, which
     # routinely carry credentials and are a separate setting for exactly that reason.
     [switch]$Processes,
+
+    # Replace the binary of an agent already installed here. Needs no token, and leaves its
+    # configuration exactly as it is.
+    [switch]$Upgrade,
 
     # Remove the agent, its task, its config and its data.
     [switch]$Uninstall
@@ -188,12 +195,28 @@ if ($Uninstall) {
 }
 
 # ── The token ────────────────────────────────────────────────────────────────────────────────────────
-if ($TokenFile) {
-    if (-not (Test-Path $TokenFile)) { throw "Cannot read the token file: $TokenFile" }
-    $Token = (Get-Content $TokenFile -Raw).Trim()
+if ($Upgrade) {
+    # An upgrade changes the binary and keeps every decision already made on this machine. So there has
+    # to be an installation to keep, and the options that would make one of those decisions again are
+    # refused rather than ignored: a switch that is accepted and does nothing reads as one that worked.
+    if (-not (Test-Path $ConfPath)) {
+        throw "There is no agent to upgrade here (no $ConfPath). Install it with -Token instead."
+    }
+    if ($Token -or $TokenFile) {
+        throw '-Upgrade keeps the token this machine already has. Run it without -Token.'
+    }
+    if ($Processes -or $PSBoundParameters.ContainsKey('Url')) {
+        throw "-Upgrade leaves the configuration alone. To change a setting, edit $ConfPath and restart the task."
+    }
 }
-if (-not $Token) {
-    throw 'A token is required. Get one from your server''s page in InfraNest, then: .\install.ps1 -Token sat_xxxxx'
+else {
+    if ($TokenFile) {
+        if (-not (Test-Path $TokenFile)) { throw "Cannot read the token file: $TokenFile" }
+        $Token = (Get-Content $TokenFile -Raw).Trim()
+    }
+    if (-not $Token) {
+        throw 'A token is required. Get one from your server''s page in InfraNest, then: .\install.ps1 -Token sat_xxxxx'
+    }
 }
 
 # ── Which build ──────────────────────────────────────────────────────────────────────────────────────
@@ -203,7 +226,8 @@ $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
     default { throw "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE" }
 }
 
-Write-Host "`nInstalling the InfraNest agent (windows/$arch).`n"
+$doing = if ($Upgrade) { 'Upgrading' } else { 'Installing' }
+Write-Host "`n$doing the InfraNest agent (windows/$arch).`n"
 
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid())
 New-Item -ItemType Directory -Path $tmp | Out-Null
@@ -244,26 +268,41 @@ try {
 
     # ── Files ────────────────────────────────────────────────────────────────────────────────────────
     New-Item -ItemType Directory -Path $InstallDir, $ConfDir -Force | Out-Null
+
+    # Stopped before the copy, not after. Windows will not replace an executable that is running, so on a
+    # machine that already has the agent the copy below fails with "being used by another process" —
+    # which is every upgrade, and every re-install.
+    if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    }
+    Get-Process -Name 'infranest-agent' -ErrorAction SilentlyContinue | Stop-Process -Force
+    Start-Sleep -Seconds 1
+
     Copy-Item $staged $BinPath -Force
     Write-Step "installed to $BinPath"
 
-    # Written at install time because the agent reads its configuration once, at startup: turning this on
-    # afterwards means editing this file and restarting the task, and install is the only moment it costs
-    # a switch.
-    $conf = "INFRANEST_TOKEN=$Token`r`nINFRANEST_URL=$Url`r`n"
-    if ($Processes) { $conf += "INFRANEST_PROCESSES=1`r`n" }
-    $conf | Set-Content -Path $ConfPath -Encoding ASCII -NoNewline
-
-    # The config holds a credential, so only Administrators and SYSTEM may read it. Inheritance is
-    # disabled first, or the permissive defaults on ProgramData survive everything set afterwards.
-    $acl = Get-Acl $ConfPath
-    $acl.SetAccessRuleProtection($true, $false)
-    foreach ($who in 'BUILTIN\Administrators', 'NT AUTHORITY\SYSTEM') {
-        $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
-            $who, 'FullControl', 'Allow')))
+    if ($Upgrade) {
+        Write-Step "keeping $ConfPath as it is"
     }
-    Set-Acl -Path $ConfPath -AclObject $acl
-    Write-Step "wrote $ConfPath (Administrators and SYSTEM only)"
+    else {
+        # Written at install time because the agent reads its configuration once, at startup: turning this
+        # on afterwards means editing this file and restarting the task, and install is the only moment it
+        # costs a switch.
+        $conf = "INFRANEST_TOKEN=$Token`r`nINFRANEST_URL=$Url`r`n"
+        if ($Processes) { $conf += "INFRANEST_PROCESSES=1`r`n" }
+        $conf | Set-Content -Path $ConfPath -Encoding ASCII -NoNewline
+
+        # The config holds a credential, so only Administrators and SYSTEM may read it. Inheritance is
+        # disabled first, or the permissive defaults on ProgramData survive everything set afterwards.
+        $acl = Get-Acl $ConfPath
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($who in 'BUILTIN\Administrators', 'NT AUTHORITY\SYSTEM') {
+            $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+                $who, 'FullControl', 'Allow')))
+        }
+        Set-Acl -Path $ConfPath -AclObject $acl
+        Write-Step "wrote $ConfPath (Administrators and SYSTEM only)"
+    }
 
     # ── The task ─────────────────────────────────────────────────────────────────────────────────────
     #

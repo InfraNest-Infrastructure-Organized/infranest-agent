@@ -23,6 +23,11 @@ TOKEN_FILE=""
 API_URL="https://ingest.infranest.io"
 FROM_FILE=""
 DO_UNINSTALL=0
+# Replace the binary of an agent that is already here, and nothing else. Separate from a plain re-install
+# because that needs the token again — which InfraNest shows once — and rewrites agent.conf from the
+# template below, quietly undoing whatever was set there since.
+DO_UPGRADE=0
+URL_GIVEN=0
 # Off unless asked for. The InfraNest UI offers this as an unticked box beside the command, because
 # turning it on is a decision about what leaves the machine, not a default somebody should discover.
 PROCESSES=0
@@ -32,6 +37,7 @@ usage() {
 Install the InfraNest monitoring agent.
 
   install.sh --token sat_xxxxx
+  install.sh --upgrade
 
 Options:
   --token <token>        the server token, from your server's page in InfraNest
@@ -40,6 +46,8 @@ Options:
   --version <version>    install a specific version instead of the latest
   --from <path>          install a binary you already have, instead of downloading one
   --processes            also report the busiest processes by name (program name only, never arguments)
+  --upgrade              replace the binary of an agent already installed here. Needs no token, and
+                         leaves its configuration exactly as it is
   --uninstall            remove the agent, its user, its config and its data
   --help                 show this
 
@@ -175,10 +183,11 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --token)      need_value "$@"; TOKEN="$2"; shift 2 ;;
     --token-file) need_value "$@"; TOKEN_FILE="$2"; shift 2 ;;
-    --url)        need_value "$@"; API_URL="$2"; shift 2 ;;
+    --url)        need_value "$@"; API_URL="$2"; URL_GIVEN=1; shift 2 ;;
     --version)    need_value "$@"; VERSION="$2"; shift 2 ;;
     --from)       need_value "$@"; FROM_FILE="$2"; shift 2 ;;
     --processes)  PROCESSES=1; shift ;;
+    --upgrade)    DO_UPGRADE=1; shift ;;
     --uninstall)  DO_UNINSTALL=1; shift ;;
     --help|-h)    usage; exit 0 ;;
     *)            die "unknown option: $1 (try --help)" ;;
@@ -214,11 +223,23 @@ if [ "$DO_UNINSTALL" -eq 1 ]; then
 fi
 
 # ── The token ────────────────────────────────────────────────────────────────────────────────────────
-if [ -n "$TOKEN_FILE" ]; then
-  [ -r "$TOKEN_FILE" ] || die "cannot read the token file: $TOKEN_FILE"
-  TOKEN="$(cat "$TOKEN_FILE")"
+if [ "$DO_UPGRADE" -eq 1 ]; then
+  # An upgrade changes the binary and keeps every decision already made on this machine. So there has to
+  # be an installation to keep, and the options that would make one of those decisions again are refused
+  # rather than ignored: a flag that is accepted and does nothing reads as a flag that worked.
+  [ -f "${CONF_DIR}/agent.conf" ] \
+    || die "there is no agent to upgrade here (no ${CONF_DIR}/agent.conf). Install it with --token instead."
+  [ -z "${TOKEN}${TOKEN_FILE}" ] \
+    || die "--upgrade keeps the token this machine already has. Run it without --token."
+  [ "$URL_GIVEN" -eq 0 ] && [ "$PROCESSES" -eq 0 ] \
+    || die "--upgrade leaves the configuration alone. To change a setting, edit ${CONF_DIR}/agent.conf and restart the agent."
+else
+  if [ -n "$TOKEN_FILE" ]; then
+    [ -r "$TOKEN_FILE" ] || die "cannot read the token file: $TOKEN_FILE"
+    TOKEN="$(cat "$TOKEN_FILE")"
+  fi
+  [ -n "$TOKEN" ] || { usage; die "a token is required — get one from your server's page in InfraNest"; }
 fi
-[ -n "$TOKEN" ] || { usage; die "a token is required — get one from your server's page in InfraNest"; }
 
 # ── Which build ──────────────────────────────────────────────────────────────────────────────────────
 os="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -234,7 +255,11 @@ case "$(uname -m)" in
 esac
 
 echo
-echo "Installing the InfraNest agent (linux/${arch})."
+if [ "$DO_UPGRADE" -eq 1 ]; then
+  echo "Upgrading the InfraNest agent (linux/${arch})."
+else
+  echo "Installing the InfraNest agent (linux/${arch})."
+fi
 echo
 
 tmp="$(mktemp -d)"
@@ -296,6 +321,12 @@ chmod 0750 "$STATE_DIR"
 # `systemctl show` prints to any local user.
 umask 077
 
+if [ "$DO_UPGRADE" -eq 1 ]; then
+  log "keeping ${CONF_DIR}/agent.conf as it is"
+else
+# Not indented, on purpose: CI lifts the branch and the template below out of this file by the column they
+# start in, and a here-document's body cannot be indented with spaces anyway.
+#
 # Written at install time because the agent reads its configuration once, at startup: turning this on
 # afterwards means editing the file and restarting the service, and install is the only moment it costs a
 # flag. Left commented out when it was not asked for, so the file still documents the setting.
@@ -345,6 +376,7 @@ CONF
 chown "$USER_NAME":"$USER_NAME" "${CONF_DIR}/agent.conf"
 chmod 0600 "${CONF_DIR}/agent.conf"
 log "wrote ${CONF_DIR}/agent.conf (0600, ${USER_NAME} only)"
+fi
 
 # ── The service ──────────────────────────────────────────────────────────────────────────────────────
 if command -v systemctl >/dev/null 2>&1; then
@@ -467,7 +499,12 @@ INFRANEST_UNIT_EOF
   #
   # Configuration errors are fatal inside the agent, so a service that comes up is one that read its
   # token and its URL. That is what makes `is-active` worth asking.
-  systemctl enable --now "$SERVICE" >/dev/null 2>&1 || true
+  #
+  # `restart`, not `enable --now`: on a machine where the agent is already running, `--now` starts
+  # nothing, and the process that was running the old binary carries on running it. The installer then
+  # reports success over an upgrade that did not happen. `restart` starts a stopped unit as well.
+  systemctl enable "$SERVICE" >/dev/null 2>&1 || true
+  systemctl restart "$SERVICE" >/dev/null 2>&1 || true
 
   if systemctl is-active --quiet "$SERVICE"; then
     log "service enabled and started"
@@ -477,6 +514,9 @@ INFRANEST_UNIT_EOF
   fi
 else
   warn "no systemd here. The agent is installed but nothing is running it."
+  if [ "$DO_UPGRADE" -eq 1 ]; then
+    warn "If it was already running, it is still running the old binary: restart it however this machine does."
+  fi
   warn "Start it however this machine starts things:  ${BIN_DIR}/infranest-agent run"
   warn "On Alpine/OpenRC an init script goes in /etc/init.d/. See the README."
 fi

@@ -103,6 +103,47 @@ jobs:
           run "pinned version, get.infranest.io blocked" --add-host get.infranest.io:192.0.2.1 \
             -e VERSION_ARG="--version v0.9.0"
 
+      # `--upgrade` exists to keep two promises a re-install cannot (InfraNest#2459): it needs no token,
+      # because InfraNest shows one once and most people no longer have it, and it leaves agent.conf
+      # alone, because a re-install rewrites it from the template and quietly turns off whatever was
+      # turned on since. Both are asserted on a file that was edited by hand after the install, which is
+      # the case that matters — an untouched file survives a rewrite looking the same.
+      #
+      # The refusals matter as much: with nothing installed there is no configuration to keep, and an
+      # option that would change one must fail rather than be accepted and ignored.
+      - name: --upgrade replaces the binary and leaves the configuration alone
+        run: |
+          out=$(docker run --rm -v "$PWD/install.sh:/install.sh:ro" debian:stable-slim sh -c '
+            set -e
+            apt-get update -qq >/dev/null && apt-get install -y -qq curl ca-certificates >/dev/null
+            conf=/etc/infranest/agent.conf
+
+            if sh /install.sh --upgrade >/dev/null 2>&1; then
+              echo "FAIL: --upgrade succeeded with no agent installed"; exit 1
+            fi
+
+            sh /install.sh --token sat_ci --processes --version v0.9.1 >/dev/null 2>&1
+            echo "INFRANEST_INTERVAL=30s" >> "$conf"
+            before=$(sha256sum "$conf"); mode=$(stat -c "%a %U" "$conf")
+            old=$(/usr/local/bin/infranest-agent --version)
+
+            for refused in "--token sat_other" "--processes" "--url https://example.test"; do
+              if sh /install.sh --upgrade $refused >/dev/null 2>&1; then
+                echo "FAIL: --upgrade accepted $refused"; exit 1
+              fi
+            done
+            [ "$(sha256sum "$conf")" = "$before" ] || { echo "FAIL: a refused upgrade changed agent.conf"; exit 1; }
+
+            sh /install.sh --upgrade >/dev/null 2>&1 || { echo "FAIL: --upgrade did not complete"; exit 1; }
+
+            [ "$(sha256sum "$conf")" = "$before" ] || { echo "FAIL: --upgrade changed agent.conf"; exit 1; }
+            [ "$(stat -c "%a %U" "$conf")" = "$mode" ] || { echo "FAIL: --upgrade changed who can read agent.conf"; exit 1; }
+            new=$(/usr/local/bin/infranest-agent --version)
+            [ "$new" != "$old" ] || { echo "FAIL: the binary is still $old"; exit 1; }
+            echo "$old -> $new"' 2>&1) \
+            || { echo "$out"; echo "::error::--upgrade does not keep its promises"; exit 1; }
+          echo "$out" | tail -1
+
       # The build-attestation check (InfraNest#2361), end to end: the real installer, a real release's
       # binary and its real attestation, served from a stand-in download host so the one thing CI cannot
       # get from a genuine release — a binary that is NOT ours, with a checksum that matches it — can be
