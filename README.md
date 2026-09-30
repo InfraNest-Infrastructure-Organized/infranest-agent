@@ -181,6 +181,24 @@ infranest-agent print          # exactly what this machine sends, printed instea
 sudo infranest-agent status    # what is being collected, and when the last send succeeded
 ```
 
+### Upgrade it
+
+```sh
+curl -fsSL https://get.infranest.io/agent.sh | sudo sh -s -- --upgrade     # Linux
+```
+
+```powershell
+irm https://get.infranest.io/agent.ps1 -OutFile install.ps1                # Windows
+.\install.ps1 -Upgrade
+```
+
+That downloads and verifies the current release exactly as an install does, replaces the binary, and
+restarts the agent. It needs no token, and it does not touch `agent.conf` — whatever you set there stays
+set. Add `--version` (`-Version`) to move to a specific release instead of the latest.
+
+Running the installer again with `--token` is a re-install, not an upgrade: it writes a fresh
+configuration, so process reporting and anything else edited by hand goes back to its default.
+
 ### Remove it
 
 Completely, leaving nothing behind:
