@@ -61,7 +61,13 @@ func TestCommandLinesCannotBeTurnedOnByAccident(t *testing.T) {
 func TestThePushPathIsDerivedNotConfigured(t *testing.T) {
 	// So a base URL cannot be set to something almost right. A trailing slash is the classic version of
 	// that, and it produces a 404 that looks like the server being down.
-	for _, base := range []string{"https://ingest.example.com", "https://ingest.example.com/"} {
+	for _, base := range []string{
+		"https://ingest.example.com",
+		"https://ingest.example.com/",
+		// Pasted out of a log. Appending the path again would be a 404 that reads as the server being down.
+		"https://ingest.example.com/api/metrics/push",
+		"https://ingest.example.com/api/metrics/push/",
+	} {
 		c := Config{URL: base}
 		if got := c.PushURL(); got != "https://ingest.example.com/api/metrics/push" {
 			t.Fatalf("%s → %s", base, got)
@@ -88,6 +94,38 @@ func TestARedirectIsTakenOnlyWithinTheSameDomain(t *testing.T) {
 		if got, ok := Adopt(current, hostile); ok || got != current {
 			t.Fatalf("expected %q to be refused, got %q %v", hostile, got, ok)
 		}
+	}
+}
+
+// InfraNest#2462. The server named the origin the fleet was already using, this adopted it as the
+// endpoint, and every agent began posting to `/` — 405, persisted, and beyond correcting from the server
+// because a correction arrives in the response to a push that succeeds.
+func TestAnOfferedOriginIsAdoptedAsTheEndpoint(t *testing.T) {
+	const current = "https://ingest.infranest.io/api/metrics/push"
+
+	// The outage itself: the same host, named as an origin, is not a move.
+	for _, same := range []string{
+		"https://ingest.infranest.io",
+		"https://ingest.infranest.io/",
+		"https://ingest.infranest.io/api/metrics/push",
+	} {
+		if got, ok := Adopt(current, same); ok || got != current {
+			t.Fatalf("expected %q to change nothing, got %q %v", same, got, ok)
+		}
+	}
+
+	// A real move, named either way, lands on the endpoint — the whole URL, not merely the host.
+	const want = "https://ingest-eu.infranest.io/api/metrics/push"
+	for _, offer := range []string{"https://ingest-eu.infranest.io", want} {
+		if got, ok := Adopt(current, offer); !ok || got != want {
+			t.Fatalf("expected %q to be adopted as %q, got %q %v", offer, want, got, ok)
+		}
+	}
+
+	// And an agent already holding the bare origin is brought back by the same call, which is what heals
+	// a machine on restart: the run loop asks this about the URL in its state file.
+	if got, ok := Adopt(current, "https://ingest.infranest.io"); ok || got != current {
+		t.Fatalf("a bare origin in the state file must resolve to the configured endpoint, got %q %v", got, ok)
 	}
 }
 
