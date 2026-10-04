@@ -27,6 +27,7 @@ func TestNothingIsSentLongerThanTheIngestAccepts(t *testing.T) {
 		{"state", clip(long, maxState), maxState},
 		{"usage path", clip(long, maxUsagePath), maxUsagePath},
 		{"kernel", clip(long, maxSystemField), maxSystemField},
+		{"boot id", clip(long, maxBootID), maxBootID},
 		{"failure reason", clip(long, maxFailReason), maxFailReason},
 	} {
 		if len(tc.got) > tc.limit {

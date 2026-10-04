@@ -32,6 +32,18 @@ type System struct {
 	// that do not, this stays false rather than guessing from kernel versions — a wrong "reboot required"
 	// costs somebody a maintenance window they did not need.
 	RebootRequired bool `json:"reboot_required"`
+
+	// How many processes the kernel has killed for lack of memory since this boot (#2810), from
+	// /proc/vmstat's `oom_kill`. A counter rather than a level, and that is the whole point: memory_percent
+	// cannot see an OOM kill, because the kill is what frees the memory — the next reading looks healthy.
+	// The counter is the one place the event survives until somebody asks. Nil where the kernel does not
+	// keep it (before 4.13, or no /proc), which is not zero: zero is a claim that nothing was killed.
+	OOMKills *uint64 `json:"oom_kills,omitempty"`
+
+	// The kernel's random identifier for this boot. Sent beside OOMKills so the receiver can tell a
+	// counter that reset because the machine rebooted from one that did not move — comparing the numbers
+	// alone cannot, since a reboot followed by as many kills as before reads as "no change".
+	BootID string `json:"boot_id,omitempty"`
 }
 
 // CollectSystem reads what the machine says about itself. Every field is independent: one unreadable file
@@ -51,6 +63,17 @@ func CollectSystem() System {
 	// Debian and Ubuntu. The file's existence *is* the signal — its contents are a human-readable note.
 	if _, err := os.Stat("/var/run/reboot-required"); err == nil {
 		s.RebootRequired = true
+	}
+
+	if f, err := os.Open("/proc/vmstat"); err == nil {
+		if n, ok := parseOOMKills(f); ok {
+			s.OOMKills = &n
+		}
+		_ = f.Close()
+	}
+
+	if v, err := os.ReadFile("/proc/sys/kernel/random/boot_id"); err == nil {
+		s.BootID = clip(strings.TrimSpace(string(v)), maxBootID)
 	}
 
 	if pending, security, ok := readUpdateStamp(); ok {
@@ -78,6 +101,31 @@ func parseOSRelease(r io.Reader) string {
 	}
 
 	return ""
+}
+
+// parseOOMKills pulls the `oom_kill` counter out of /proc/vmstat.
+//
+// The file is `name value` per line, a hundred-odd of them. Only the one line matters; the rest are the
+// kernel's own bookkeeping. Absent on kernels older than 4.13, where the answer is "cannot tell" rather
+// than zero.
+func parseOOMKills(r io.Reader) (uint64, bool) {
+	scanner := bufio.NewScanner(r)
+
+	for scanner.Scan() {
+		name, value, found := strings.Cut(scanner.Text(), " ")
+		if !found || name != "oom_kill" {
+			continue
+		}
+
+		n, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
+		if err != nil {
+			return 0, false
+		}
+
+		return n, true
+	}
+
+	return 0, false
 }
 
 // readUpdateStamp reads the counts `update-notifier` leaves behind.

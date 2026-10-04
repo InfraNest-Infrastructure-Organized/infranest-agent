@@ -50,7 +50,7 @@ is the first thing documented rather than a debugging flag buried at the bottom.
 | | |
 |---|---|
 | **CPU** | user + system time, as a percentage. Deliberately **not** `100 - idle`, which counts steal (CPU the hypervisor gave another tenant) and iowait — on a shared vCPU those are most of a false alarm, and neither is load this machine can do anything about |
-| **Memory** | used and total, plus swap. "Used" is total minus `MemAvailable`, not minus `MemFree` — counting the page cache as used makes a healthy Linux box look permanently full |
+| **Memory** | used and total, plus swap. "Used" is total minus `MemAvailable`, not minus `MemFree` — counting the page cache as used makes a healthy Linux box look permanently full. Also **how many processes the kernel has killed for lack of memory** since boot: a kill is what frees the memory, so the percentage on the next reading looks healthy, and this counter is the only trace it leaves |
 | **Disk space** | per mount: device, mount point, used, total |
 | **What is filling a disk** | at most hourly, and only for the fullest mount: the largest directories, bounded to a minute and to four levels deep. Answers the question the percentage cannot — a disk at 94% is not actionable until you know it is the journal. Directories the agent is not allowed to read are **named**, and the total it did count is sent so the difference from the mount's real usage can be shown as unaccounted for. See [what it cannot see](#what-it-cannot-see) |
 | **Load average** | 1 / 5 / 15 minute |

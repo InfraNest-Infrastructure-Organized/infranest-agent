@@ -28,6 +28,7 @@ const (
 	maxUsagePath   = 512
 	maxUsageKind   = 64
 	maxSystemField = 128
+	maxBootID      = 64
 	maxFailReason  = 255
 )
 

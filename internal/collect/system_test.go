@@ -72,3 +72,31 @@ func TestTheSecurityLineIsNotCountedTwice(t *testing.T) {
 		t.Fatalf("pending=%d security=%d", pending, security)
 	}
 }
+
+func TestTheOOMCounterIsReadFromVmstat(t *testing.T) {
+	// An excerpt of a real /proc/vmstat: the line we want sits among a hundred we do not.
+	const vmstat = `nr_free_pages 123456
+pgmajfault 9001
+oom_kill 3
+numa_hit 42
+`
+	n, ok := parseOOMKills(strings.NewReader(vmstat))
+
+	if !ok || n != 3 {
+		t.Fatalf("n=%d ok=%v", n, ok)
+	}
+}
+
+func TestAKernelWithoutTheOOMCounterReportsNothingRatherThanZero(t *testing.T) {
+	// Before 4.13 the line does not exist. Zero would claim nothing was killed; the honest answer is that
+	// this kernel cannot say.
+	if _, ok := parseOOMKills(strings.NewReader("nr_free_pages 123456\npgmajfault 9001\n")); ok {
+		t.Fatal("invented an OOM count for a kernel that keeps none")
+	}
+}
+
+func TestAGarbledOOMCounterReportsNothing(t *testing.T) {
+	if _, ok := parseOOMKills(strings.NewReader("oom_kill lots\n")); ok {
+		t.Fatal("accepted a counter that is not a number")
+	}
+}
