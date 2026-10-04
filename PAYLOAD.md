@@ -6,7 +6,7 @@ This is a **public contract**. The agent is one implementation of it; anyone may
 endpoint does not care which is talking to it. So this document is the specification rather than a
 description of our code, and where the two disagree the endpoint's validation is the authority.
 
-**Contract version 5** — current as of agent `v0.8.0`.
+**Contract version 6** — current as of agent `v0.10.0`.
 
 Every change so far has been *additive*, and that is the rule rather than a run of luck: a field is added,
 never repurposed, and never made required after the fact. A sender written against version 1 keeps working
@@ -16,6 +16,7 @@ long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
+| 6 | `system.oom_kills` and `system.boot_id` — how many processes the kernel has killed for lack of memory since this boot, and which boot that is |
 | 5 | `collectors` — which optional collectors this agent has switched on |
 | 4 | `services[].result`, `services[].exec_main_code` and `services[].exec_main_status` — why a failed unit failed, without its log output |
 | 3 | `services[].restarts`, `services[].memory_bytes`, `state_changed_at` on every unit rather than only the failed ones, and `processes[].cpu_percent` / `processes[].started_at` actually being sent |
@@ -95,6 +96,8 @@ nothing rather than a guess.
 | `system.kernel` / `system.os` | string ≤128 | |
 | `system.pending_updates` / `security_updates` | int | Absent means "could not tell", which is not zero |
 | `system.reboot_required` | bool | |
+| `system.oom_kills` | int ≥0 | How many processes the kernel has killed for lack of memory **since this boot** — Linux's `oom_kill` in `/proc/vmstat`. A counter, not a level: `memory_percent` cannot see an OOM kill, because the kill is what frees the memory. The receiver alerts when it rises between pushes. Absent where the kernel keeps no such counter, which is not zero |
+| `system.boot_id` | string ≤64 | An identifier that changes on every boot — Linux's `/proc/sys/kernel/random/boot_id`. **Send it with `oom_kills`.** Without it a reboot is indistinguishable from a counter that did not move, and the receiver will not judge a rise it cannot place in a boot |
 
 ## Alongside the samples
 
