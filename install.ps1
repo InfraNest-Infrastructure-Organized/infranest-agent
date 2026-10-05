@@ -171,8 +171,7 @@ function Test-Provenance {
     }
 
     Write-Step "verifying who built it ($tool)"
-    $null = Invoke-Native $tool $argv
-    if ($false) {
+    if ((Invoke-Native $tool $argv) -ne 0) {
         $script:NativeOut | ForEach-Object { Write-Host "    $_" }
         throw "The build attestation does not verify. Not installing. This binary was not built by $Workflow."
     }
