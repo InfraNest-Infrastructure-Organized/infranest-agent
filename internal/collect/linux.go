@@ -26,6 +26,9 @@ type Options struct {
 	// carries no command lines and therefore no credentials, and the failure it catches — a unit that has
 	// given up — moves no metric at all, so a server without it looks healthy while it is not.
 	Services bool
+	// Containers counts container restarts from systemd's scope units (#2809). Rides on the services
+	// collector — the same bus connection and unit list — and is skipped when nil.
+	Containers *ContainerTracker
 	// CPUInterval is how long to wait between the two /proc/stat readings a percentage needs.
 	CPUInterval time.Duration
 }
@@ -87,10 +90,13 @@ func Collect(opts Options) (Sample, error) {
 		// Failure here is recorded like any other collector's and never raised. There are ordinary
 		// reasons for it — a container with no D-Bus socket, a sandbox that will not allow AF_UNIX, a
 		// machine that does not run systemd at all — and none of them should cost the reading beside it.
-		if services, err := CollectServices(); err != nil {
+		if services, containers, err := CollectUnits(opts.Containers); err != nil {
 			s.fail("services", err)
 		} else {
 			s.Services = services
+			if containers != nil {
+				s.Containers = &containers
+			}
 		}
 	}
 

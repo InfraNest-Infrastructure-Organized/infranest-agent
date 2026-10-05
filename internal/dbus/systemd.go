@@ -23,6 +23,7 @@ const (
 	managerInterface   = "org.freedesktop.systemd1.Manager"
 	unitInterface      = "org.freedesktop.systemd1.Unit"
 	serviceInterface   = "org.freedesktop.systemd1.Service"
+	scopeInterface     = "org.freedesktop.systemd1.Scope"
 	propertiesGet      = "org.freedesktop.DBus.Properties"
 )
 
@@ -286,9 +287,28 @@ func (c *Conn) MemoryCurrent(unitPath string) (uint64, error) {
 // Asked only for units that have actually failed. It is one call each, and on a healthy machine there are
 // none — which is what keeps a per-unit property read affordable.
 func (c *Conn) StateChangedAt(unitPath string) (time.Time, error) {
+	return c.unitTimestamp(unitPath, "StateChangeTimestamp")
+}
+
+// ActiveEnteredAt is when the unit last became active (#2809).
+//
+// For a container's scope this is when the container started, and since every restart is a new scope, it
+// moves on each one — which is how restarts are counted without asking the runtime.
+func (c *Conn) ActiveEnteredAt(unitPath string) (time.Time, error) {
+	return c.unitTimestamp(unitPath, "ActiveEnterTimestamp")
+}
+
+// ScopeMemoryCurrent is what a scope unit's cgroup is using, in bytes — the scope-interface twin of
+// {@link MemoryCurrent}, which asks the service interface and is an error on a scope.
+func (c *Conn) ScopeMemoryCurrent(unitPath string) (uint64, error) {
+	return c.unitPropertyUint64(unitPath, scopeInterface, "MemoryCurrent")
+}
+
+// unitTimestamp reads one of the unit interface's microsecond timestamps.
+func (c *Conn) unitTimestamp(unitPath, name string) (time.Time, error) {
 	body, signature, err := c.Call(
 		managerDestination, unitPath, propertiesGet,
-		"Get", "ss", unitInterface, "StateChangeTimestamp",
+		"Get", "ss", unitInterface, name,
 	)
 	if err != nil {
 		return time.Time{}, err
@@ -300,7 +320,7 @@ func (c *Conn) StateChangedAt(unitPath string) (time.Time, error) {
 	d := &decoder{buf: body}
 	inner := d.signature()
 	if inner != "t" {
-		return time.Time{}, fmt.Errorf("StateChangeTimestamp is %q, expected a uint64", inner)
+		return time.Time{}, fmt.Errorf("%s is %q, expected a uint64", name, inner)
 	}
 	micros := d.uint64()
 	if d.err != nil {

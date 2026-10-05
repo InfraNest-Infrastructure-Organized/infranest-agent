@@ -16,7 +16,7 @@ long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
-| 7 | `system.cpus`, and `system.pro` — how many CPUs the kernel was given, and whether Ubuntu Pro (Livepatch, ESM) is still attached |
+| 7 | `system.cpus`, `system.pro` and `containers` — how many CPUs the kernel was given, whether Ubuntu Pro (Livepatch, ESM) is still attached, and the running containers with how often each has restarted |
 | 6 | `system.oom_kills` and `system.boot_id` — how many processes the kernel has killed for lack of memory since this boot, and which boot that is |
 | 5 | `collectors` — which optional collectors this agent has switched on |
 | 4 | `services[].result`, `services[].exec_main_code` and `services[].exec_main_status` — why a failed unit failed, without its log output |
@@ -94,6 +94,13 @@ nothing rather than a guess.
 | `services[].result` | string ≤32 | Why the unit last finished the way it did, from a fixed vocabulary the service manager chooses from: `exit-code`, `signal`, `core-dump`, `timeout`, `watchdog`, `start-limit-hit`, `oom-kill`, `resources`, `protocol`. Sent **only for failed units**, and only when it is not `success` — a healthy unit would carry it on every row to say nothing happened. This is the answer to "why did it fail" that carries no log output: see [Why there is no log excerpt](#why-there-is-no-log-excerpt) |
 | `services[].exec_main_code` | int | How the main process ended, as a POSIX `si_code`: 1 exited, 2 killed, 3 dumped. **Send it with `exec_main_status` or not at all** |
 | `services[].exec_main_status` | int | The exit status, or the signal number when the code says killed. Meaningless alone: `0` is a clean exit beside code 1 and is not a status at all beside code 2. Both are absent together where the service manager has no record of a main process ending — which is a unit that failed before it ever started, and is a different fact from exiting with zero |
+| `containers` | array, max 100 | Running containers, from systemd's `docker-<id>.scope` / `libpod-<id>.scope` units — **never the Docker socket**, which is root on the host. A snapshot like `services`: on the newest sample only. Absent when the agent could not ask systemd; `[]` means none that systemd can see, which includes every host on Docker's `cgroupfs` driver |
+| `containers[].id` | string ≤64 | The short container ID (twelve hex digits). Names live in the runtime's own state, which only root can read; `docker ps --filter id=<id>` gives the name |
+| `containers[].runtime` | string ≤32 | `docker` or `podman` |
+| `containers[].active_state` | string ≤32 | The scope's systemd state |
+| `containers[].started_at` | RFC3339 | When this incarnation started — the scope's `ActiveEnterTimestamp`. A restart is a new scope, so this moves on every restart |
+| `containers[].restarts` | int ≥0 | Restarts this agent has seen since it began watching the container. **A counter and a lower bound**: counted once per collection, so several restarts between two readings count as one, and it starts at 0 when the agent starts — the receiver judges rises and treats a fall as a reset |
+| `containers[].memory_bytes` | int ≥0 | The scope's cgroup memory. Absent where systemd keeps no accounting |
 | `system.kernel` / `system.os` | string ≤128 | |
 | `system.pending_updates` / `security_updates` | int | Absent means "could not tell", which is not zero |
 | `system.reboot_required` | bool | |

@@ -77,6 +77,9 @@ type Runner struct {
 	// A finished scan waiting for the next push. Not spooled — see sendOnce.
 	pendingUsage *collect.UsageScan
 
+	// Each container's last start, between collections (#2809). Made on first use by containerTracker.
+	containers *collect.ContainerTracker
+
 	// The plan's storage cadence, as last stated by a push response (#886). Zero until one says.
 	serverInterval time.Duration
 	// The last over-ceiling value refused, so a misconfigured plan says so once rather than every push.
@@ -153,6 +156,16 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 }
 
+// containerTracker is the run loop's memory of each container's last start, made on first use (#2809).
+// Held for the life of the process: it is what turns two readings of a scope into "it restarted".
+func (r *Runner) containerTracker() *collect.ContainerTracker {
+	if r.containers == nil {
+		r.containers = collect.NewContainerTracker()
+	}
+
+	return r.containers
+}
+
 // collectOnce takes one reading and spools it. Never returns an error: a collector that failed is
 // recorded in the reading itself, and a spool that cannot be written is logged rather than fatal —
 // stopping the agent because one write failed would turn a full disk into a monitoring outage, at
@@ -164,6 +177,7 @@ func (r *Runner) collectOnce(seq int64, state *State) {
 		MaxProcesses: 10,
 		CPUInterval:  300 * time.Millisecond,
 		Services:     r.Config.Services,
+		Containers:   r.containerTracker(),
 	})
 	if err != nil {
 		r.logf("collection failed: %v", err)

@@ -14,7 +14,7 @@ import (
 // Mounts are absent from this list on purpose. They look like a snapshot and are also a *measurement*:
 // `worst_mount_percent` is derived per sample and is what a disk rule averages over its window, so a
 // backfilled sample without mounts is a hole in that series rather than a saving.
-var snapshotFields = []string{"services", "processes", "system"}
+var snapshotFields = []string{"services", "containers", "processes", "system"}
 
 // trimSnapshots strips the snapshot fields from every sample except the newest.
 //

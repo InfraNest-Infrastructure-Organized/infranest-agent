@@ -53,7 +53,8 @@ type Options struct {
 	// Accepted and ignored: service units are a systemd concept, and Windows services are a different
 	// model that would need its own collector and its own rule kind rather than being squeezed into this
 	// one. Present so the field exists on every platform's Options and the runner needs no build tags.
-	Services bool
+	Services   bool
+	Containers *ContainerTracker
 }
 
 // Collect takes one reading on Windows.
