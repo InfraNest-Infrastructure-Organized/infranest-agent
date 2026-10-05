@@ -252,6 +252,209 @@ jobs:
           check "control: pinned to ci.yml instead, gh"     foreign gh     INSTALLED install-pinned-to-ci.sh
           check "control: pinned to ci.yml instead, cosign" foreign cosign INSTALLED install-pinned-to-ci.sh
 
+  installer-windows:
+    name: install.ps1 refuses a binary we did not build (${{ matrix.shell }})
+    runs-on: windows-latest
+    # install.ps1 carries the same attestation check as install.sh — the same release.yml pin, the same
+    # "fails means stop, cannot check means say so" rule — and until this job nothing ever ran it
+    # (InfraNest#2375). PowerShell has its own ways to be silently wrong here: an external command's
+    # failure lives only in $LASTEXITCODE, which $ErrorActionPreference does not look at, so a verifier
+    # that fails can read as one that passed. Only running the real file against real bundles shows it.
+    #
+    # Both shells, because both are how this file is run: Windows PowerShell 5.1 is what a fresh Windows
+    # Server has, and it differs from PowerShell 7 in exactly the area under test — how a native command's
+    # stderr and exit code reach the script.
+    #
+    # Wider than the workflow's default for the same reason as installer-sources: the pin case needs a
+    # bundle this workflow signed. Nothing in this job writes to the repository.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [pwsh, powershell]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The same construction as installer-sources: a real release binary with a marker appended, so it
+      # runs and has a digest of its own, signed here by ci.yml with the action release.yml uses. A fork's
+      # pull request gets no id-token, so these cases are skipped there, with a notice.
+      - name: Make a binary, signed by this workflow
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force foreign | Out-Null
+          Invoke-WebRequest -OutFile foreign/infranest-agent_windows_amd64.exe `
+            https://github.com/InfraNest-Infrastructure-Organized/infranest-agent/releases/download/v0.10.0/infranest-agent_windows_amd64.exe
+          [IO.File]::AppendAllText("$PWD/foreign/infranest-agent_windows_amd64.exe", 'signed by ci.yml')
+
+      - name: Sign it with the action release.yml uses
+        id: foreign
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: foreign/infranest-agent_windows_amd64.exe
+
+      # The real installer, run as a file by the shell under test, against a stand-in download host so a
+      # binary that is NOT ours with a checksum that matches it can be served. v0.10.0 publishes its
+      # attestation as a release asset, so the genuine tree is that release, byte for byte.
+      #
+      # Nothing is stubbed. The runner is elevated and install.ps1 registers a scheduled task rather than a
+      # service, so every install completes for real — task, ACLs and all — and is removed with the
+      # installer's own -Uninstall before the next case. -Url points at a port nothing listens on, so an
+      # agent the task starts sends nowhere.
+      #
+      # Which verifier runs is chosen by PATH: gh is on the runner and cosign is fetched, and each case
+      # sees only the one it names (or neither), exactly as a customer's machine would.
+      - name: A binary we did not build is refused when gh or cosign can check it
+        shell: pwsh
+        env:
+          SHELL_UNDER_TEST: ${{ matrix.shell }}
+          FOREIGN_BUNDLE: ${{ steps.foreign.outputs.bundle-path }}
+        run: |
+          $R = 'InfraNest-Infrastructure-Organized/infranest-agent'
+          $V = 'v0.10.0'
+          $A = 'infranest-agent_windows_amd64.exe'
+          $B = 'infranest-agent.sigstore.json'
+          $root = Join-Path $env:RUNNER_TEMP 'ps1'
+          $Bin = Join-Path $env:ProgramFiles 'InfraNest\infranest-agent.exe'
+          $haveForeign = [bool]$env:FOREIGN_BUNDLE
+
+          function New-Tree($name) {
+            $d = Join-Path $root "$name/releases/download/$V"
+            New-Item -ItemType Directory -Force $d | Out-Null
+            $d
+          }
+          function Write-Sum($d) {
+            $h = (Get-FileHash (Join-Path $d $A) -Algorithm SHA256).Hash.ToLower()
+            [IO.File]::WriteAllText((Join-Path $d "$A.sha256"), "$h  $A`n")
+          }
+
+          $g = New-Tree genuine
+          foreach ($f in $A, "$A.sha256", $B) {
+            Invoke-WebRequest -OutFile (Join-Path $g $f) "https://github.com/$R/releases/download/$V/$f"
+          }
+          $t = New-Tree tampered
+          Copy-Item "$g/*" $t
+          [IO.File]::AppendAllText((Join-Path $t $A), 'x')
+          Write-Sum $t
+          # A release with no attestation beside it, as every release before v0.9.2 is. With no bundle,
+          # gh is asked whether it is logged in before it is used, and on a runner it is not.
+          $u = New-Tree unattested
+          Copy-Item "$g/$A", "$g/$A.sha256" $u
+          if ($haveForeign) {
+              $f = New-Tree foreign
+              Copy-Item "foreign/$A" $f
+              Write-Sum $f
+              Copy-Item $env:FOREIGN_BUNDLE (Join-Path $f $B)
+            }
+  
+            # One server per tree, each installer copy pointed at its own. Read and written as bytes-exact
+            # UTF-8 without a BOM, as install.ps1 is: re-encoding it would test a file nobody downloads.
+            $ports = @{ genuine = 8765; tampered = 8766; foreign = 8767; unattested = 8768 }
+            foreach ($tree in $ports.Keys) {
+              if (Test-Path (Join-Path $root $tree)) {
+                Start-Process python -WindowStyle Hidden -ArgumentList '-m', 'http.server', $ports[$tree],
+                  '--bind', '127.0.0.1', '--directory', (Join-Path $root $tree)
+              }
+            }
+            $utf8 = [Text.UTF8Encoding]::new($false)
+            $src = [IO.File]::ReadAllText("$PWD/install.ps1")
+            function Edit-Lines($text, $from, $to) {
+              $out = $text.Replace($from, $to)
+              if ($out -eq $text) { throw "install.ps1 no longer has: $from" }
+              $out
+            }
+            foreach ($tree in $ports.Keys) {
+              $s = Edit-Lines $src "`$script:Sources = @('https://get.infranest.io', `"https://github.com/`$Repo`")" `
+                                   "`$script:Sources = @('http://127.0.0.1:$($ports[$tree])')"
+              [IO.File]::WriteAllText((Join-Path $root "install-$tree.ps1"), $s, $utf8)
+            }
+  
+            # The control: the same installer with only its two pin lines pointed at ci.yml must ACCEPT the
+            # foreign bundle — otherwise the refusals could be the bundle being unreadable, or not matching the
+            # binary, rather than the pin.
+            $foreignSrc = [IO.File]::ReadAllText((Join-Path $root 'install-foreign.ps1'))
+            $pinned = Edit-Lines $foreignSrc 'workflows/release.yml"' 'workflows/ci.yml"'
+            $pinned = Edit-Lines $pinned 'workflows/release\.yml@refs/tags/v"' 'workflows/ci\.yml@"'
+            $a = $foreignSrc -split "`n"; $b = $pinned -split "`n"
+            $changed = @(0..($a.Count - 1) | Where-Object { $a[$_] -ne $b[$_] }).Count
+            if ($changed -ne 2) { Write-Host "::error::the control changed $changed lines, not the two pin lines"; exit 1 }
+            [IO.File]::WriteAllText((Join-Path $root 'install-pinned-to-ci.ps1'), $pinned, $utf8)
+  
+            # The verifiers. Every PATH entry holding gh or cosign is dropped, and each case adds back the one
+            # directory it names.
+            $tools = Join-Path $env:RUNNER_TEMP 'tools'
+            New-Item -ItemType Directory -Force "$tools/gh", "$tools/cosign" | Out-Null
+            Copy-Item (Get-Command gh).Source "$tools/gh/gh.exe"
+            Invoke-WebRequest -OutFile "$tools/cosign/cosign.exe" `
+              https://github.com/sigstore/cosign/releases/latest/download/cosign-windows-amd64.exe
+            $bare = ($env:PATH -split ';' | Where-Object {
+              $_ -and -not (Test-Path (Join-Path $_ 'gh.exe')) -and -not (Test-Path (Join-Path $_ 'cosign.exe'))
+            }) -join ';'
+            $hostPath = $env:PATH
+  
+            foreach ($port in $ports.Values) {
+              for ($i = 0; $i -lt 40; $i++) {
+                try { Invoke-WebRequest "http://127.0.0.1:$port/" -TimeoutSec 2 | Out-Null; break } catch { Start-Sleep -Milliseconds 250 }
+              }
+            }
+  
+            $shell = $env:SHELL_UNDER_TEST
+            # Every case runs, and the job fails at the end: one broken path should not hide the others.
+            $script:failed = @()
+            function Test-Install($label, $tree, $tool, $want, [string[]]$says, $script = "install-$tree.ps1") {
+              & $shell -NoProfile -ExecutionPolicy Bypass -File "$PWD/install.ps1" -Uninstall *> $null
+              if (Test-Path $Bin) { Write-Host "::error::${label}: -Uninstall left $Bin behind"; exit 1 }
+  
+              $env:PATH = switch ($tool) { 'gh' { "$tools\gh;$bare" } 'cosign' { "$tools\cosign;$bare" } default { $bare } }
+              $out = & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root $script) `
+                       -Token sat_ci -Version $V -Url 'https://127.0.0.1:9' 2>&1 | Out-String
+              $code = $LASTEXITCODE
+              $env:PATH = $hostPath
+              $got = if ($code -eq 0 -and (Test-Path $Bin)) { 'INSTALLED' } else { 'REFUSED' }
+  
+              Write-Host "── ${label}: $got (exit $code)"
+              $out -split "`r?`n" | Where-Object { $_ -match 'verif|built|provenance|attestation' } | ForEach-Object { Write-Host "   $_" }
+              $bad = @()
+              if ($got -ne $want) { $bad += "expected $want" }
+              # What it says matters as much as what it did. A refusal must be the attestation's doing — a
+              # failed download or a missing file also ends in REFUSED — and an install must name its check.
+              # Unwrapped as well as raw: PowerShell wraps a long error message at the console width.
+              $flat = $out -replace '\s+', ' '
+              foreach ($p in $says) { if ($out -notmatch $p -and $flat -notmatch $p) { $bad += "output lacks /$p/" } }
+              if ($bad) {
+                Write-Host $out
+                Write-Host "::error::$label ($shell): $($bad -join '; ')"
+                $script:failed += $label
+              }
+            }
+  
+            $released = [regex]::Escape("built by $R/.github/workflows/release.yml")
+            $refused = 'build attestation does not verify'
+            Test-Install 'genuine, gh'          genuine  gh     INSTALLED 'verifying who built it \(gh\)', "(?m)^\s+$released\s*$"
+            Test-Install 'genuine, cosign'      genuine  cosign INSTALLED 'verifying who built it \(cosign\)', "(?m)^\s+$released\s*$"
+            Test-Install 'tampered, gh'         tampered gh     REFUSED   'verifying who built it \(gh\)', $refused
+            Test-Install 'tampered, cosign'     tampered cosign REFUSED   'verifying who built it \(cosign\)', $refused
+            Test-Install 'genuine, no verifier' genuine  none   INSTALLED 'build provenance not checked: neither gh nor cosign is installed \(the checksum was\)'
+            Test-Install 'no attestation published, gh not logged in' unattested gh INSTALLED "build provenance not checked: release $V has no attestation file"
+  
+            if ($haveForeign) {
+            $ci = [regex]::Escape("built by $R/.github/workflows/ci.yml")
+            Test-Install 'signed by ci.yml, gh'                      foreign gh     REFUSED   'verifying who built it \(gh\)', $refused
+            Test-Install 'signed by ci.yml, cosign'                  foreign cosign REFUSED   'verifying who built it \(cosign\)', $refused
+            Test-Install 'control: pinned to ci.yml instead, gh'     foreign gh     INSTALLED "(?m)^\s+$ci\s*$" -script install-pinned-to-ci.ps1
+            Test-Install 'control: pinned to ci.yml instead, cosign' foreign cosign INSTALLED "(?m)^\s+$ci\s*$" -script install-pinned-to-ci.ps1
+          } else {
+            Write-Host "::notice::the signed-by-another-workflow cases were skipped: a fork's pull request cannot sign"
+          }
+
+          & $shell -NoProfile -ExecutionPolicy Bypass -File "$PWD/install.ps1" -Uninstall *> $null
+          if ($script:failed) { Write-Host "$($script:failed.Count) case(s) failed: $($script:failed -join ', ')"; exit 1 }
+          exit 0
+
   invariant:
     name: It only sends
     runs-on: ubuntu-latest
