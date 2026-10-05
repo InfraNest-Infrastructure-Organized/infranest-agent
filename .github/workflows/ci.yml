@@ -340,6 +340,10 @@ jobs:
           Copy-Item "$g/*" $t
           [IO.File]::AppendAllText((Join-Path $t $A), 'x')
           Write-Sum $t
+          # A release with no attestation beside it, as every release before v0.9.2 is. With no bundle,
+          # gh is asked whether it is logged in before it is used, and on a runner it is not.
+          $u = New-Tree unattested
+          Copy-Item "$g/$A", "$g/$A.sha256" $u
           if ($haveForeign) {
             $f = New-Tree foreign
             Copy-Item "foreign/$A" $f
@@ -349,7 +353,7 @@ jobs:
 
           # One server per tree, each installer copy pointed at its own. Read and written as bytes-exact
           # UTF-8 without a BOM, as install.ps1 is: re-encoding it would test a file nobody downloads.
-          $ports = @{ genuine = 8765; tampered = 8766; foreign = 8767 }
+          $ports = @{ genuine = 8765; tampered = 8766; foreign = 8767; unattested = 8768 }
           foreach ($tree in $ports.Keys) {
             if (Test-Path (Join-Path $root $tree)) {
               Start-Process python -WindowStyle Hidden -ArgumentList '-m', 'http.server', $ports[$tree],
@@ -433,6 +437,7 @@ jobs:
           Test-Install 'tampered, gh'         tampered gh     REFUSED   'verifying who built it \(gh\)', $refused
           Test-Install 'tampered, cosign'     tampered cosign REFUSED   'verifying who built it \(cosign\)', $refused
           Test-Install 'genuine, no verifier' genuine  none   INSTALLED 'build provenance not checked: neither gh nor cosign is installed \(the checksum was\)'
+          Test-Install 'no attestation published, gh not logged in' unattested gh INSTALLED "build provenance not checked: release $V has no attestation file"
 
           if (-not $haveForeign) {
             Write-Host "::notice::the signed-by-another-workflow cases were skipped: a fork's pull request cannot sign"
