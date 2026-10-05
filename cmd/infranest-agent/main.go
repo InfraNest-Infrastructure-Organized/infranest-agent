@@ -94,6 +94,9 @@ func run(args []string, stdout, stderr *os.File) error {
 			// `print` shows what would be sent, so it shows this too — it is the fastest way for somebody
 			// to see which units the agent considers watched on their own machine.
 			Services: true,
+			// And the containers it can see (#2809). A fresh tracker, so every restart count reads 0: one
+			// reading has nothing earlier to count a restart against.
+			Containers: collect.NewContainerTracker(),
 		})
 	case "run":
 		return runAgent(stdout, stderr, environment(*configPath))

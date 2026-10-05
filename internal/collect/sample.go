@@ -32,6 +32,11 @@ type Sample struct {
 	// as "no answer" and not as "nothing has failed", because those need opposite things said about them.
 	Services []Service `json:"services,omitempty"`
 
+	// Running containers, from systemd's scope units (#2809). A pointer so the two answers survive
+	// encoding: nil is absent ("could not ask"), and a pointer to an empty list is "none that systemd can
+	// see" — which must reach the receiver as `[]`, so a container that has gone is cleared there.
+	Containers *[]Container `json:"containers,omitempty"`
+
 	// What the machine says about itself: kernel, OS, pending updates, reboot required (#767). Changes
 	// rarely, so it rides on every sample rather than having a cadence of its own — it is four short
 	// strings and two integers, which is cheaper than the bookkeeping a schedule would need.

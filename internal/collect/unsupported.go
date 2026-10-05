@@ -16,6 +16,7 @@ type Options struct {
 	MaxProcesses int
 	CPUInterval  time.Duration
 	Services     bool
+	Containers   *ContainerTracker
 }
 
 // Collect reports honestly that this platform is not implemented rather than returning zeros.

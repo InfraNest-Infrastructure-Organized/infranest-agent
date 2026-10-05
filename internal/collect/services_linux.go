@@ -34,15 +34,29 @@ Templates and generated units are excluded. `getty@.service` is a template with 
 `.scope` and `.mount` units are the kernel's bookkeeping rather than anything anybody chose to run.
 */
 func CollectServices() ([]Service, error) {
+	services, _, err := CollectUnits(nil)
+
+	return services, err
+}
+
+// CollectUnits is CollectServices plus the running containers (#2809), from the same unit list — one bus
+// connection and one ListUnits for both. Containers are reported only when a tracker is passed, because
+// without one there is nothing to count restarts against.
+func CollectUnits(tracker *ContainerTracker) ([]Service, []Container, error) {
 	conn, err := dbus.Dial(busTimeout)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer func() { _ = conn.Close() }()
 
 	units, err := conn.ListUnits()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+
+	var containers []Container
+	if tracker != nil {
+		containers = collectContainers(conn, units, tracker, time.Now())
 	}
 
 	services := make([]Service, 0, 64)
@@ -138,7 +152,62 @@ func CollectServices() ([]Service, error) {
 		services = services[:maxServices]
 	}
 
-	return services, nil
+	return services, containers, nil
+}
+
+// collectContainers reads the container scopes out of a unit list and counts their restarts.
+//
+// Never nil once asked: an empty list is the answer "this host runs no containers systemd can see" —
+// which includes a host on Docker's `cgroupfs` driver, where containers have no scope at all. The receiver
+// cannot tell those apart, and the documentation says so rather than this code guessing.
+func collectContainers(conn *dbus.Conn, units []dbus.Unit, tracker *ContainerTracker, now time.Time) []Container {
+	containers := make([]Container, 0, 8)
+
+	for _, unit := range units {
+		id, runtime, ok := containerScope(unit.Name)
+		if !ok || unit.Path == "" {
+			continue
+		}
+
+		c := Container{ID: id, Runtime: runtime, ActiveState: clip(unit.ActiveState, maxState)}
+
+		if at, err := conn.ActiveEnteredAt(unit.Path); err == nil && !at.IsZero() {
+			c.StartedAt = &at
+			n := tracker.observe(id, at, now)
+			c.Restarts = &n
+		}
+
+		if b, err := conn.ScopeMemoryCurrent(unit.Path); err == nil && b != dbus.MemoryUnknown {
+			c.MemoryBytes = &b
+		}
+
+		containers = append(containers, c)
+	}
+
+	tracker.forget(now)
+
+	// Most restarts first, so a cap never cuts the container in the loop; then by ID for a stable order.
+	sort.SliceStable(containers, func(i, j int) bool {
+		a, b := containers[i], containers[j]
+		ra, rb := uint64(0), uint64(0)
+		if a.Restarts != nil {
+			ra = *a.Restarts
+		}
+		if b.Restarts != nil {
+			rb = *b.Restarts
+		}
+		if ra != rb {
+			return ra > rb
+		}
+
+		return a.ID < b.ID
+	})
+
+	if len(containers) > maxContainers {
+		containers = containers[:maxContainers]
+	}
+
+	return containers
 }
 
 // watchable excludes the units that are bookkeeping rather than something somebody chose to run.
