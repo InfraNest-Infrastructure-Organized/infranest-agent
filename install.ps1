@@ -137,6 +137,32 @@ function Invoke-Native {
     return $LASTEXITCODE
 }
 
+# Stop the agent and wait until Windows has let go of it (InfraNest#2919). `Stop-Process -Force` asks for
+# the process to end and returns at once; the executable stays locked until it has actually exited, so the
+# delete or copy that follows used to race it — an uninstall that left the binary behind, an upgrade that
+# failed with "being used by another process". Waiting on the process itself replaces a guessed sleep.
+function Stop-Agent {
+    if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    }
+    $running = @(Get-Process -Name 'infranest-agent' -ErrorAction SilentlyContinue)
+    if ($running) {
+        $running | Stop-Process -Force -ErrorAction SilentlyContinue
+        $running | Wait-Process -Timeout 20 -ErrorAction SilentlyContinue
+    }
+}
+
+# Remove a path, allowing a few seconds for whatever still has a just-closed file open — antivirus scans an
+# executable as its process exits. Returns whether the path is gone, so the caller says so honestly.
+function Remove-Path {
+    param($path)
+    for ($i = 0; $i -lt 10 -and (Test-Path $path); $i++) {
+        Remove-Item $path -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path $path) { Start-Sleep -Milliseconds 500 }
+    }
+    return -not (Test-Path $path)
+}
+
 function Test-Provenance {
     param($bin)
     $bundle = Join-Path $tmp 'attestation.json'
@@ -190,21 +216,22 @@ if (-not ([Security.Principal.WindowsPrincipal]$identity).IsInRole(
 if ($Uninstall) {
     Write-Host "`nRemoving the InfraNest agent.`n"
 
+    Stop-Agent
     if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
-        Stop-ScheduledTask   -TaskName $TaskName -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
         Write-Step 'removed the scheduled task'
     }
 
-    Get-Process -Name 'infranest-agent' -ErrorAction SilentlyContinue | Stop-Process -Force
-
+    $left = @()
     foreach ($path in @($InstallDir, $ConfDir)) {
         if (Test-Path $path) {
-            Remove-Item $path -Recurse -Force
-            Write-Step "removed $path"
+            if (Remove-Path $path) { Write-Step "removed $path" } else { $left += $path }
         }
     }
 
+    if ($left) {
+        throw "Could not remove $($left -join ', ') — something still has it open. Close it, or restart, and run -Uninstall again."
+    }
     Write-Host "`nDone. Nothing of the agent is left on this machine.`n"
     return
 }
@@ -287,11 +314,7 @@ try {
     # Stopped before the copy, not after. Windows will not replace an executable that is running, so on a
     # machine that already has the agent the copy below fails with "being used by another process" —
     # which is every upgrade, and every re-install.
-    if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
-        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    }
-    Get-Process -Name 'infranest-agent' -ErrorAction SilentlyContinue | Stop-Process -Force
-    Start-Sleep -Seconds 1
+    Stop-Agent
 
     Copy-Item $staged $BinPath -Force
     Write-Step "installed to $BinPath"
