@@ -230,7 +230,7 @@ if ($Uninstall) {
     }
 
     if ($left) {
-        throw "Could not remove $($left -join ', ') — something still has it open. Close it, or restart, and run -Uninstall again."
+        throw "Could not remove $($left -join ', '): something still has it open. Close it, or restart, and run -Uninstall again."
     }
     Write-Host "`nDone. Nothing of the agent is left on this machine.`n"
     return
