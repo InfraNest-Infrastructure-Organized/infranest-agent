@@ -100,3 +100,68 @@ func TestAGarbledOOMCounterReportsNothing(t *testing.T) {
 		t.Fatal("accepted a counter that is not a number")
 	}
 }
+
+/*
+Ubuntu Pro (#2811). The cache is the Pro client's own; these are trimmed from real ones, keeping the keys
+the parser reads and enough of the rest to show it ignores them.
+*/
+
+const attachedProCache = `{
+  "_schema_version": "0.1",
+  "account": {"name": "Somebody Ltd", "id": "aAbBcC"},
+  "attached": true,
+  "contract": {"name": "Ubuntu Pro (Infra-only)", "id": "cCdDeE"},
+  "expires": "2027-03-01T00:00:00+00:00",
+  "machine_id": "0123456789abcdef",
+  "services": [
+    {"name": "esm-apps", "entitled": "yes", "status": "enabled"},
+    {"name": "esm-infra", "entitled": "yes", "status": "enabled"},
+    {"name": "livepatch", "entitled": "yes", "status": "warning"}
+  ]
+}`
+
+func TestAnAttachedMachineReportsItsServicesAndExpiry(t *testing.T) {
+	pro, ok := parseProStatus(strings.NewReader(attachedProCache))
+
+	if !ok || !pro.Attached {
+		t.Fatalf("pro=%+v ok=%v", pro, ok)
+	}
+	if pro.Livepatch != "warning" || pro.ESMInfra != "enabled" {
+		t.Fatalf("services: %+v", pro)
+	}
+	if pro.Expires != "2027-03-01T00:00:00Z" {
+		t.Fatalf("expires: %q", pro.Expires)
+	}
+}
+
+func TestAnUnattachedCacheIsAClaimOfDetached(t *testing.T) {
+	// An unattached machine's cache lists what *could* be enabled, with no status — and no contract.
+	const cache = `{"attached": false, "expires": null,
+	  "services": [{"name": "esm-infra", "available": "yes"}, {"name": "livepatch", "available": "yes"}]}`
+
+	pro, ok := parseProStatus(strings.NewReader(cache))
+
+	if !ok || pro.Attached {
+		t.Fatalf("pro=%+v ok=%v", pro, ok)
+	}
+	if pro.Livepatch != "" || pro.ESMInfra != "" || pro.Expires != "" {
+		t.Fatalf("invented a state for an unattached machine: %+v", pro)
+	}
+}
+
+func TestACacheWithoutAnAttachedKeyYieldsNothingRatherThanDetached(t *testing.T) {
+	// `attached: false` raises an alert, so a file this parser does not recognise must not become one.
+	for _, body := range []string{`{"services": []}`, `not json`, ``, `{"attached": "yes"}`} {
+		if pro, ok := parseProStatus(strings.NewReader(body)); ok {
+			t.Fatalf("%q read as %+v", body, pro)
+		}
+	}
+}
+
+func TestAPlaceholderExpiryIsDroppedRatherThanSent(t *testing.T) {
+	pro, ok := parseProStatus(strings.NewReader(`{"attached": true, "expires": "n/a"}`))
+
+	if !ok || pro.Expires != "" {
+		t.Fatalf("pro=%+v ok=%v", pro, ok)
+	}
+}
