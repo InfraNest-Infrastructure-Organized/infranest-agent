@@ -6,7 +6,7 @@ This is a **public contract**. The agent is one implementation of it; anyone may
 endpoint does not care which is talking to it. So this document is the specification rather than a
 description of our code, and where the two disagree the endpoint's validation is the authority.
 
-**Contract version 6** — current as of agent `v0.10.0`.
+**Contract version 7** — current as of agent `v0.11.0`.
 
 Every change so far has been *additive*, and that is the rule rather than a run of luck: a field is added,
 never repurposed, and never made required after the fact. A sender written against version 1 keeps working
@@ -16,6 +16,7 @@ long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
+| 7 | `system.cpus`, and `system.pro` — how many CPUs the kernel was given, and whether Ubuntu Pro (Livepatch, ESM) is still attached |
 | 6 | `system.oom_kills` and `system.boot_id` — how many processes the kernel has killed for lack of memory since this boot, and which boot that is |
 | 5 | `collectors` — which optional collectors this agent has switched on |
 | 4 | `services[].result`, `services[].exec_main_code` and `services[].exec_main_status` — why a failed unit failed, without its log output |
@@ -98,6 +99,11 @@ nothing rather than a guess.
 | `system.reboot_required` | bool | |
 | `system.oom_kills` | int ≥0 | How many processes the kernel has killed for lack of memory **since this boot** — Linux's `oom_kill` in `/proc/vmstat`. A counter, not a level: `memory_percent` cannot see an OOM kill, because the kill is what frees the memory. The receiver alerts when it rises between pushes. Absent where the kernel keeps no such counter, which is not zero |
 | `system.boot_id` | string ≤64 | An identifier that changes on every boot — Linux's `/proc/sys/kernel/random/boot_id`. **Send it with `oom_kills`.** Without it a reboot is indistinguishable from a counter that did not move, and the receiver will not judge a rise it cannot place in a boot |
+| `system.cpus` | int ≥1 | CPUs the kernel will schedule this agent on. What the machine **has**, which after a resize is not what a provider's last sync says it bought — the receiver prefers this for capacity and keeps the provider's figure for the plan. Absent means "could not tell" |
+| `system.pro` | object | Ubuntu Pro, from the client's world-readable cache at `/var/lib/ubuntu-advantage/status.json`. **Absent where there is no Pro client or its cache could not be read — which is not detached.** Only `attached: false` is a claim of detached, and the receiver alerts only when a machine that *was* attached makes it. Nothing else from the cache is sent: not the account, the contract or the machine id |
+| `system.pro.attached` | bool | |
+| `system.pro.livepatch` / `esm_infra` | string ≤32 | The client's own state word — `enabled`, `disabled`, `warning`, `n/a` — verbatim. Absent when the cache does not list the service, as an unattached machine's does not |
+| `system.pro.expires` | RFC3339 | When the subscription ends. The cache is only as fresh as the client's last refresh, so a contract that lapsed since still reads `attached: true`; an expiry in the past is how the receiver sees through that. Absent unless attached |
 
 ## Alongside the samples
 

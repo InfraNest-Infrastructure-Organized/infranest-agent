@@ -2,10 +2,13 @@ package collect
 
 import (
 	"bufio"
+	"encoding/json"
 	"io"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // System is what the server page's System card shows: the machine's own description of itself.
@@ -44,6 +47,39 @@ type System struct {
 	// counter that reset because the machine rebooted from one that did not move — comparing the numbers
 	// alone cannot, since a reboot followed by as many kills as before reads as "no change".
 	BootID string `json:"boot_id,omitempty"`
+
+	// How many CPUs this machine can schedule on (#2886). The provider's plan says what was bought; this
+	// says what the kernel was given, and after a resize the two disagree until the provider's next sync —
+	// or for ever, on a server no provider describes. Go's own count, which follows CPU affinity and not a
+	// cgroup quota: the right answer for an agent running on the host, an overstatement inside a container
+	// that has been given a slice of it.
+	CPUs int `json:"cpus,omitempty"`
+
+	// The Ubuntu Pro client's own account of this machine (#2811). Nil where there is no Pro client, or its
+	// cache could not be read — which is not "detached": a Debian box and an unreadable file both say
+	// nothing, and only a cache that says `attached: false` is a claim worth alerting on.
+	Pro *ProStatus `json:"pro,omitempty"`
+}
+
+// ProStatus is the part of `pro status` that decides whether a machine is still being patched.
+//
+// When a subscription lapses or a machine is detached, Livepatch stops applying kernel fixes and the ESM
+// archives stop serving security updates — and nothing on the machine says so. Everything else in the
+// client's cache (the account name, the contract id, the machine id) is left where it is: none of it is
+// needed to answer the question, and all of it identifies somebody.
+type ProStatus struct {
+	Attached bool `json:"attached"`
+
+	// The client's own word for each service's state — `enabled`, `disabled`, `warning`, `n/a` — sent
+	// verbatim, the same rule as a systemd unit's state. Absent when the cache does not list the service,
+	// which an unattached machine's cache does not.
+	Livepatch string `json:"livepatch,omitempty"`
+	ESMInfra  string `json:"esm_infra,omitempty"`
+
+	// When the subscription ends, RFC3339 in UTC. Sent because the cache is only as fresh as the client's
+	// last refresh: a contract that lapsed since then still reads `attached: true`, and the expiry date is
+	// what lets the receiver see through that. Absent on an unattached machine.
+	Expires string `json:"expires,omitempty"`
 }
 
 // CollectSystem reads what the machine says about itself. Every field is independent: one unreadable file
@@ -81,7 +117,67 @@ func CollectSystem() System {
 		s.SecurityUpdates = &security
 	}
 
+	s.CPUs = runtime.NumCPU()
+
+	if f, err := os.Open(proStatusPath); err == nil {
+		if pro, ok := parseProStatus(io.LimitReader(f, maxProStatusBytes)); ok {
+			s.Pro = &pro
+		}
+		_ = f.Close()
+	}
+
 	return s
+}
+
+// The Ubuntu Pro client's status cache. World-readable by design — it is what lets `pro status` answer an
+// unprivileged user without asking Canonical — so reading it needs nothing the agent does not already have,
+// and is the only way to ask, since running `pro status` is a subprocess.
+const proStatusPath = "/var/lib/ubuntu-advantage/status.json"
+
+// A real cache is a few tens of kilobytes. The cap is what keeps a corrupted or replaced file from being
+// read into memory whole, under a unit that is allowed 64 MB.
+const maxProStatusBytes = 1 << 20
+
+// parseProStatus pulls the attached flag, two service states and the expiry out of the client's cache.
+//
+// Split from the file read so it can be tested against captured caches on any machine. A cache without an
+// `attached` key is not one this parser understands, and yields nothing rather than a guessed false — a
+// false is the claim that raises an alert.
+func parseProStatus(r io.Reader) (ProStatus, bool) {
+	var raw struct {
+		Attached *bool           `json:"attached"`
+		Expires  json.RawMessage `json:"expires"`
+		Services []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+		} `json:"services"`
+	}
+
+	if err := json.NewDecoder(r).Decode(&raw); err != nil || raw.Attached == nil {
+		return ProStatus{}, false
+	}
+
+	pro := ProStatus{Attached: *raw.Attached}
+
+	for _, svc := range raw.Services {
+		switch svc.Name {
+		case "livepatch":
+			pro.Livepatch = clip(svc.Status, maxState)
+		case "esm-infra":
+			pro.ESMInfra = clip(svc.Status, maxState)
+		}
+	}
+
+	// The client writes `null` or a non-date placeholder when there is no contract; only a real timestamp
+	// is passed on, and only for an attached machine, where it means something.
+	var expires string
+	if pro.Attached && json.Unmarshal(raw.Expires, &expires) == nil {
+		if t, err := time.Parse(time.RFC3339, expires); err == nil {
+			pro.Expires = t.UTC().Format(time.RFC3339)
+		}
+	}
+
+	return pro, true
 }
 
 // parseOSRelease pulls PRETTY_NAME out of /etc/os-release.
