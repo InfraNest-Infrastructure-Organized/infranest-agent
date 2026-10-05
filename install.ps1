@@ -121,6 +121,22 @@ $Workflow    = "$Repo/.github/workflows/release.yml"
 $IdentityRe  = "^https://github\.com/$Repo/\.github/workflows/release\.yml@refs/tags/v"
 $Attestation = 'infranest-agent.sigstore.json'
 
+# A native command's stderr is not its verdict; its exit code is. Windows PowerShell 5.1 turns every line
+# a native command writes to stderr into an error record, and under $ErrorActionPreference = 'Stop' the
+# first one ends the script. So cosign's deprecation notice, or gh saying it is not logged in, stopped the
+# install before the exit code was ever read — a genuine release could not be installed with cosign on
+# 5.1, and a refusal read as a crash instead of saying why (InfraNest#2375). Scoped to this function, so
+# everything else keeps stopping on the first error.
+#
+# The exit code starts at a failure, so a command that never ran cannot leave an earlier success behind.
+function Invoke-Native {
+    param([string]$exe, [string[]]$argv)
+    $ErrorActionPreference = 'Continue'
+    $global:LASTEXITCODE = 1
+    $script:NativeOut = @(& $exe @argv 2>&1 | ForEach-Object { "$_" })
+    return $LASTEXITCODE
+}
+
 function Test-Provenance {
     param($bin)
     $bundle = Join-Path $tmp 'attestation.json'
@@ -132,7 +148,7 @@ function Test-Provenance {
     $gh = Get-Command gh -ErrorAction SilentlyContinue
     $cosign = Get-Command cosign -ErrorAction SilentlyContinue
     $ghAuthed = $false
-    if ($gh -and -not $haveBundle) { & gh auth status *> $null; $ghAuthed = ($LASTEXITCODE -eq 0) }
+    if ($gh -and -not $haveBundle) { $ghAuthed = ((Invoke-Native 'gh' @('auth', 'status')) -eq 0) }
 
     if ($gh -and ($haveBundle -or $ghAuthed)) {
         $tool = 'gh'
@@ -155,9 +171,8 @@ function Test-Provenance {
     }
 
     Write-Step "verifying who built it ($tool)"
-    $out = & $tool @argv 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        $out | ForEach-Object { Write-Host "    $_" }
+    if ((Invoke-Native $tool $argv) -ne 0) {
+        $script:NativeOut | ForEach-Object { Write-Host "    $_" }
         throw "The build attestation does not verify. Not installing. This binary was not built by $Workflow."
     }
     Write-Step "built by $Workflow"
