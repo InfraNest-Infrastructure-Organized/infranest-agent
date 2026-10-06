@@ -178,6 +178,7 @@ func (r *Runner) collectOnce(seq int64, state *State) {
 		CPUInterval:  300 * time.Millisecond,
 		Services:     r.Config.Services,
 		Containers:   r.containerTracker(),
+		Renewers:     r.Config.Renewers,
 	})
 	if err != nil {
 		r.logf("collection failed: %v", err)
@@ -304,6 +305,7 @@ func (r *Runner) sendOnce(ctx context.Context, url *string, state *State) error 
 		Processes:   r.Config.Processes,
 		ProcessArgs: r.Config.ProcessArgs,
 		Services:    r.Config.Services,
+		Renewers:    r.Config.Renewers,
 	})
 
 	if !result.ServerTime.IsZero() {

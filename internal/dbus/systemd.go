@@ -2,6 +2,7 @@ package dbus
 
 import (
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -24,6 +25,7 @@ const (
 	unitInterface      = "org.freedesktop.systemd1.Unit"
 	serviceInterface   = "org.freedesktop.systemd1.Service"
 	scopeInterface     = "org.freedesktop.systemd1.Scope"
+	timerInterface     = "org.freedesktop.systemd1.Timer"
 	propertiesGet      = "org.freedesktop.DBus.Properties"
 )
 
@@ -302,6 +304,26 @@ func (c *Conn) ActiveEnteredAt(unitPath string) (time.Time, error) {
 // {@link MemoryCurrent}, which asks the service interface and is an error on a scope.
 func (c *Conn) ScopeMemoryCurrent(unitPath string) (uint64, error) {
 	return c.unitPropertyUint64(unitPath, scopeInterface, "MemoryCurrent")
+}
+
+// TimerLastTrigger is when a timer last fired (#3149) — for certbot's timer, when it last tried to renew.
+// Zero when it never has. Realtime microseconds, like every timestamp here.
+func (c *Conn) TimerLastTrigger(unitPath string) (time.Time, error) {
+	return c.timerTimestamp(unitPath, "LastTriggerUSec")
+}
+
+// TimerNextElapse is when a timer fires next, on the wall clock. Zero when it is not scheduled.
+func (c *Conn) TimerNextElapse(unitPath string) (time.Time, error) {
+	return c.timerTimestamp(unitPath, "NextElapseUSecRealtime")
+}
+
+func (c *Conn) timerTimestamp(unitPath, name string) (time.Time, error) {
+	micros, err := c.unitPropertyUint64(unitPath, timerInterface, name)
+	if err != nil || micros == 0 || micros == math.MaxUint64 {
+		return time.Time{}, err
+	}
+
+	return time.UnixMicro(int64(micros)).UTC(), nil
 }
 
 // unitTimestamp reads one of the unit interface's microsecond timestamps.

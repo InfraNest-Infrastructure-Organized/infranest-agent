@@ -49,6 +49,11 @@ type Config struct {
 	// talk to the system bus.
 	Services bool
 
+	// Renewers reports what renews certificates on this machine (#3149) and defaults to **on**: it reads
+	// certbot's world-readable renewal configs and systemd's record of its timer — certificate names, which
+	// are public in the certificate itself, and dates. `INFRANEST_RENEWERS=0` turns it off.
+	Renewers bool
+
 	// StateDir holds the spool and the last-run record. Everything in it is disposable: losing it costs
 	// undelivered readings and nothing else.
 	StateDir string
@@ -72,6 +77,7 @@ func Load(getenv func(string) string) (Config, error) {
 		Processes: truthy(getenv("INFRANEST_PROCESSES")),
 		// Default-on, so absence means yes and only an explicit falsey value turns it off.
 		Services:    !falsey(getenv("INFRANEST_SERVICES")),
+		Renewers:    !falsey(getenv("INFRANEST_RENEWERS")),
 		ProcessArgs: truthy(getenv("INFRANEST_PROCESS_ARGS")),
 	}
 

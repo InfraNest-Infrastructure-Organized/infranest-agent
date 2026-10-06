@@ -58,6 +58,7 @@ is the first thing documented rather than a debugging flag buried at the bottom.
 | **Uptime** | seconds since boot |
 | **Processes** | the largest few by memory, off by default, each with its CPU share and when it started. Ranked by memory rather than CPU because ranking by CPU would need two readings of *every* process; the share is measured for the reported few only, which is ten extra file reads rather than a second walk of all of `/proc`. **Arguments are omitted** — command lines routinely carry credentials, so the executable name is what gets sent unless you ask otherwise |
 | **Services** | systemd units that were set up to run, which of them have failed, **why each failed**, **how many times each has been restarted**, and what each is using in memory. Watched set is "enabled, plus anything currently failed", so it works with no configuration. Read over D-Bus; nothing here can start, stop or restart a unit. The failure reason is systemd's own word for it — `oom-kill`, `timeout`, `exit-code` and the rest — and **no log output is sent**: see [what it cannot see](#what-it-cannot-see) |
+| **Certificate renewers** | what renews this machine's certificates, and whether its last run worked: certbot's renewal configs (which certificates, which authenticator) and its systemd timer (when it last ran, how it finished, when it runs next); Caddy's and Traefik's certificate stores where they can be read. Only world-readable files — certbot's configs are; **private keys are never opened**, and Caddy's and Traefik's stores are owner-only on a stock install, so for those the agent reports that the store is there and refused it rather than reading it. `INFRANEST_RENEWERS=0` turns it off |
 | **Containers** | Docker and Podman containers that are running, how much memory each is using, and **how often each has restarted**: a container in a restart loop is `Up` every time anyone looks. Read from the scope units systemd keeps for each container, over the same D-Bus connection as the services above — **never from the Docker socket**, which is root on the host. The cost is that containers are known by their short ID, not their name. Hosts on Docker's older `cgroupfs` driver have no such units and report none |
 
 A failed unit is worth its own line here because it is the failure that moves no number: a backup timer
@@ -403,6 +404,7 @@ All optional except the token, and all set for you by the installer.
 | `INFRANEST_PROCESSES` | collect the busiest processes. Off by default |
 | `INFRANEST_PROCESS_ARGS` | include full command lines. Off by default, and for good reason — see below |
 | `INFRANEST_SERVICES` | watch systemd units and report the ones that have failed. **On** by default — see below |
+| `INFRANEST_RENEWERS` | report what renews certificates here (certbot, Caddy, Traefik) and its last run. **On** by default |
 
 `INFRANEST_URL` must be `https`. The token is a bearer credential and this is the wire it crosses; there
 is no configuration for which plaintext is the right trade, so the agent refuses to start rather than

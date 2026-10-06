@@ -6,7 +6,7 @@ This is a **public contract**. The agent is one implementation of it; anyone may
 endpoint does not care which is talking to it. So this document is the specification rather than a
 description of our code, and where the two disagree the endpoint's validation is the authority.
 
-**Contract version 7** — current as of agent `v0.11.0`.
+**Contract version 8** — current as of agent `v0.12.0`.
 
 Every change so far has been *additive*, and that is the rule rather than a run of luck: a field is added,
 never repurposed, and never made required after the fact. A sender written against version 1 keeps working
@@ -16,6 +16,7 @@ long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
+| 8 | `renewers` and `collectors.renewers` — what renews this machine's certificates (certbot, Caddy, Traefik), which names, and certbot's last run |
 | 7 | `system.cpus`, `system.pro` and `containers` — how many CPUs the kernel was given, whether Ubuntu Pro (Livepatch, ESM) is still attached, and the running containers with how often each has restarted |
 | 6 | `system.oom_kills` and `system.boot_id` — how many processes the kernel has killed for lack of memory since this boot, and which boot that is |
 | 5 | `collectors` — which optional collectors this agent has switched on |
@@ -101,6 +102,19 @@ nothing rather than a guess.
 | `containers[].started_at` | RFC3339 | When this incarnation started — the scope's `ActiveEnterTimestamp`. A restart is a new scope, so this moves on every restart |
 | `containers[].restarts` | int ≥0 | Restarts this agent has seen since it began watching the container. **A counter and a lower bound**: counted once per collection, so several restarts between two readings count as one, and it starts at 0 when the agent starts — the receiver judges rises and treats a fall as a reset |
 | `containers[].memory_bytes` | int ≥0 | The scope's cgroup memory. Absent where systemd keeps no accounting |
+| `renewers` | array, max 50 | What renews certificates on this machine. A snapshot like `services`: on the newest sample only. Absent when the collector is off; `[]` means it looked and found nothing. Read **only from world-readable files** — see below |
+| `renewers[].tool` | string | `certbot`, `caddy` or `traefik` |
+| `renewers[].name` | string ≤255 | certbot's lineage (the renewal config's name), or the certificate's main name |
+| `renewers[].domains` | array of string ≤253, max 100 | The names it renews — from the certificate when it could be read, otherwise from certbot's webroot map, otherwise the lineage name |
+| `renewers[].domains_guessed` | bool | The names are the lineage name, not read from anything that lists them. A weaker claim, and the receiver treats it as one |
+| `renewers[].not_after` | RFC3339 | The certificate's expiry, **only when its file could be read** — on most certbot installs `live/` is root-only and this is absent |
+| `renewers[].source` | string ≤512 | The file this was read from, or the store that refused it |
+| `renewers[].authenticator` | string ≤64 | certbot's: `webroot`, `nginx`, `apache`, `standalone`, `dns-…` |
+| `renewers[].unit` | string ≤255 | The systemd timer that runs it. Absent for certbot from cron, and for Caddy, which renews in-process |
+| `renewers[].last_run_at` | RFC3339 | When that timer last fired. **Absent is not "never"** — it is "systemd could not say" |
+| `renewers[].last_result` | string ≤32 | How the renewal service last finished, systemd's own word: `success`, or `exit-code`, `timeout`, `signal`… — one `certbot renew` run renews every lineage, so this is every certbot certificate's result |
+| `renewers[].next_run_at` | RFC3339 | When the timer fires next |
+| `renewers[].unreadable` | bool | The store exists and refused the agent — Traefik's `acme.json` is always owner-only, Caddy's storage usually is. `source` names it; `mode` and `root_owned` say why, as in `disk_usage.unreadable[]`. Not a failure of the collector: it is the true answer to "can an unprivileged agent read this" |
 | `system.kernel` / `system.os` | string ≤128 | |
 | `system.pending_updates` / `security_updates` | int | Absent means "could not tell", which is not zero |
 | `system.reboot_required` | bool | |
@@ -117,7 +131,7 @@ nothing rather than a guess.
 | Field | Notes |
 |---|---|
 | `agent_version` | string ≤32. Shown in the UI, so a fleet running a version with a known bug is visible rather than something to be discovered |
-| `collectors` | object | Which optional collectors are on: `processes`, `process_args`, `services`, all booleans. **Sent on every push, and never omitted when false** — the false is the answer that matters. Without it an absent `processes` array means either "switched off" or "nothing to report yet", and a receiver that guesses tells somebody their agent is misconfigured when it was installed a minute ago |
+| `collectors` | object | Which optional collectors are on: `processes`, `process_args`, `services`, `renewers`, all booleans. **Sent on every push, and never omitted when false** — the false is the answer that matters. Without it an absent `processes` array means either "switched off" or "nothing to report yet", and a receiver that guesses tells somebody their agent is misconfigured when it was installed a minute ago |
 | `failed` | `{"collector": "reason"}`, max 32, reasons ≤255. Collectors that could not read what they were asked for. Reported rather than hidden — silently sending fewer fields looks identical to a machine that has less to say |
 | `disk_usage` | One mount's directory breakdown. Rides on whichever push follows the walk — see below |
 
@@ -154,7 +168,7 @@ first-come list is full.
 
 ## Snapshots belong on the newest sample only
 
-`services`, `processes` and `system` describe **now**, not the moment a reading was taken. The server
+`services`, `processes`, `system` and `renewers` describe **now**, not the moment a reading was taken. The server
 applies them from the newest sample in the batch and ignores them on every other one — deliberately,
 because applying each in turn would leave the disk card showing whichever happened to be last in the
 payload: an hour-old state presented as current.

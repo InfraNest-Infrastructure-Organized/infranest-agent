@@ -29,6 +29,10 @@ type Options struct {
 	// Containers counts container restarts from systemd's scope units (#2809). Rides on the services
 	// collector — the same bus connection and unit list — and is skipped when nil.
 	Containers *ContainerTracker
+	// Renewers reports what renews certificates here (#3149): certbot's renewal configs and timer, Caddy's
+	// and Traefik's stores. On by default — it reads only world-readable files and certificate names that
+	// are public anyway — and `INFRANEST_RENEWERS=0` turns it off.
+	Renewers bool
 	// CPUInterval is how long to wait between the two /proc/stat readings a percentage needs.
 	CPUInterval time.Duration
 }
@@ -98,6 +102,11 @@ func Collect(opts Options) (Sample, error) {
 				s.Containers = &containers
 			}
 		}
+	}
+
+	if opts.Renewers {
+		renewers := CollectRenewers()
+		s.Renewers = &renewers
 	}
 
 	return s, nil
