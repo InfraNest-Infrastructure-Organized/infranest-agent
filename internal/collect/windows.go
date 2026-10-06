@@ -55,6 +55,8 @@ type Options struct {
 	// one. Present so the field exists on every platform's Options and the runner needs no build tags.
 	Services   bool
 	Containers *ContainerTracker
+	// Accepted and ignored: certbot, Caddy and Traefik renewals are read from Linux paths.
+	Renewers bool
 }
 
 // Collect takes one reading on Windows.

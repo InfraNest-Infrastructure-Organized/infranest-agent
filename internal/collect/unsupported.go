@@ -17,6 +17,7 @@ type Options struct {
 	CPUInterval  time.Duration
 	Services     bool
 	Containers   *ContainerTracker
+	Renewers     bool
 }
 
 // Collect reports honestly that this platform is not implemented rather than returning zeros.

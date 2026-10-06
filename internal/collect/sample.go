@@ -42,6 +42,11 @@ type Sample struct {
 	// strings and two integers, which is cheaper than the bookkeeping a schedule would need.
 	System *System `json:"system,omitempty"`
 
+	// What renews certificates on this machine (#3149). A snapshot like `services`: nil when the collector
+	// is off, and a pointer to an empty list when it looked and found nothing — which must reach the
+	// receiver as `[]`, so a renewer that has gone is cleared there.
+	Renewers *[]Renewer `json:"renewers,omitempty"`
+
 	AgentVersion string `json:"agent_version,omitempty"`
 
 	// Collectors that failed, by name, with the reason. Reported rather than hidden: a collector that

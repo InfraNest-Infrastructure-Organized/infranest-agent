@@ -32,6 +32,7 @@ type Collectors struct {
 	Processes   bool `json:"processes"`
 	ProcessArgs bool `json:"process_args"`
 	Services    bool `json:"services"`
+	Renewers    bool `json:"renewers"`
 }
 
 // Result is what one push accomplished.
