@@ -33,6 +33,15 @@ type Sample struct {
 	DiskReadBps   *int64 `json:"disk_read_bps,omitempty"`
 	DiskWriteBps  *int64 `json:"disk_write_bps,omitempty"`
 
+	// Pressure stall information, percent of the last minute (InfraNest #3827): how long runnable tasks
+	// waited on CPU, memory and I/O — `some` (at least one waiting) and, for memory and I/O, `full` (all of
+	// them). Absent on kernels without PSI.
+	PressureCPU        *float64 `json:"pressure_cpu,omitempty"`
+	PressureMemory     *float64 `json:"pressure_memory,omitempty"`
+	PressureMemoryFull *float64 `json:"pressure_memory_full,omitempty"`
+	PressureIO         *float64 `json:"pressure_io,omitempty"`
+	PressureIOFull     *float64 `json:"pressure_io_full,omitempty"`
+
 	Mounts    []Mount   `json:"mounts,omitempty"`
 	Processes []Process `json:"processes,omitempty"`
 
