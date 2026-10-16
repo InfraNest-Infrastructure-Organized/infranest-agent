@@ -67,6 +67,10 @@ type System struct {
 	// that has been given a slice of it.
 	CPUs int `json:"cpus,omitempty"`
 
+	// Software RAID arrays, from /proc/mdstat (InfraNest #3833). Absent where there are none, or no md
+	// driver — which is most machines, and says nothing about their disks.
+	Raid []RaidArray `json:"raid,omitempty"`
+
 	// The Ubuntu Pro client's own account of this machine (#2811). Nil where there is no Pro client, or its
 	// cache could not be read — which is not "detached": a Debian box and an unreadable file both say
 	// nothing, and only a cache that says `attached: false` is a claim worth alerting on.
@@ -140,6 +144,11 @@ func CollectSystem() System {
 	s.CPUs = runtime.NumCPU()
 
 	s.TimeSynced, s.TimeErrorMs = readTimeSync()
+
+	if f, err := os.Open("/proc/mdstat"); err == nil {
+		s.Raid = parseMdstat(io.LimitReader(f, 1<<20))
+		_ = f.Close()
+	}
 
 	s.AutoUpdate = CollectAutoUpdate()
 

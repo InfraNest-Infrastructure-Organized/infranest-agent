@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"reflect"
 	"strings"
 	"syscall"
 	"time"
@@ -49,7 +50,8 @@ func Collect(opts Options) (Sample, error) {
 
 	// Independent of everything else, like every collector here: an unreadable /etc/os-release costs the
 	// OS name and nothing more.
-	if sys := CollectSystem(); sys != (System{}) {
+	// IsZero rather than `!= System{}`: the struct holds a slice (raid), which makes it incomparable.
+	if sys := CollectSystem(); !reflect.ValueOf(sys).IsZero() {
 		s.System = &sys
 	}
 
