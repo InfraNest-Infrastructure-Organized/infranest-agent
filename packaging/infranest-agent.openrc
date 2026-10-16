@@ -1,0 +1,25 @@
+#!/sbin/openrc-run
+# InfraNest monitoring agent, for OpenRC (Alpine and others without systemd).
+#
+# supervise-daemon restarts it if it exits, like the systemd unit's Restart=on-failure. It runs as its own
+# unprivileged user: OpenRC has no equivalent of the unit's sandboxing directives, so that user is the
+# guarantee here. The agent reads /etc/infranest/agent.conf itself.
+name="InfraNest agent"
+description="InfraNest monitoring agent"
+command="/usr/local/bin/infranest-agent"
+command_args="run"
+command_user="infranest-agent:infranest-agent"
+supervisor="supervise-daemon"
+respawn_delay=15
+respawn_max=0
+output_log="/var/log/infranest-agent.log"
+error_log="/var/log/infranest-agent.log"
+
+depend() {
+	need net
+	after firewall
+}
+
+start_pre() {
+	checkpath --file --owner infranest-agent:infranest-agent --mode 0640 /var/log/infranest-agent.log
+}

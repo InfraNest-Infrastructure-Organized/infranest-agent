@@ -304,8 +304,9 @@ func (r *Runner) sendOnce(ctx context.Context, url *string, state *State) error 
 	result, err := r.Sender.Send(ctx, *url, samples, nil, usage, push.Collectors{
 		Processes:   r.Config.Processes,
 		ProcessArgs: r.Config.ProcessArgs,
-		Services:    r.Config.Services,
-		Renewers:    r.Config.Renewers,
+		// Only where there is a systemd to ask (#3836): on OpenRC or runit it is not switched on, it is absent.
+		Services: r.Config.Services && collect.HasSystemd(),
+		Renewers: r.Config.Renewers,
 	})
 
 	if !result.ServerTime.IsZero() {

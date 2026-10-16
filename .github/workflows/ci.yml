@@ -503,6 +503,17 @@ jobs:
           # A unit with no User= runs as root. Cheap to assert, and the whole point of the file.
           grep -qx 'User=infranest-agent' /tmp/embedded.service \
             || { echo "::error::the embedded unit has no User= line"; exit 1; }
+          # The same for the OpenRC and runit scripts (#3836), and the same reason: none may run as root.
+          for kind in openrc runit; do
+            tag=$(echo "$kind" | tr '[:lower:]' '[:upper:]')
+            sed -n "/<<.INFRANEST_${tag}_EOF./,/^INFRANEST_${tag}_EOF\$/p" install.sh | sed '1d;$d' > "/tmp/embedded.$kind"
+            if ! diff -u "packaging/infranest-agent.$kind" "/tmp/embedded.$kind"; then
+              echo "::error::install.sh embeds a different $kind script than packaging/infranest-agent.$kind."
+              exit 1
+            fi
+            grep -q 'infranest-agent:infranest-agent' "/tmp/embedded.$kind" \
+              || { echo "::error::the embedded $kind script does not drop to the agent user"; exit 1; }
+          done
           grep -qx 'NoNewPrivileges=yes' /tmp/embedded.service \
             || { echo "::error::the embedded unit lost NoNewPrivileges"; exit 1; }
 

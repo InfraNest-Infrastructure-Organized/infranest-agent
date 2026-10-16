@@ -42,6 +42,13 @@ func CollectServices() ([]Service, error) {
 // CollectUnits is CollectServices plus the running containers (#2809), from the same unit list — one bus
 // connection and one ListUnits for both. Containers are reported only when a tracker is passed, because
 // without one there is nothing to count restarts against.
+// HasSystemd is sd_booted(): whether this machine was booted by systemd. On Alpine (OpenRC), Void (runit)
+// and inside most containers it was not, and there is no unit list to ask for — so the services collector
+// is skipped there rather than reported failing on every sample (InfraNest #3836).
+func HasSystemd() bool {
+	return fileExists("/run/systemd/system")
+}
+
 func CollectUnits(tracker *ContainerTracker) ([]Service, []Container, error) {
 	conn, err := dbus.Dial(busTimeout)
 	if err != nil {

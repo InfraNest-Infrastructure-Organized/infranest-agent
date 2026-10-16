@@ -221,6 +221,16 @@ if [ "$DO_UNINSTALL" -eq 1 ]; then
     rm -f "/etc/systemd/system/${SERVICE}.service"
     systemctl daemon-reload 2>/dev/null || true
   fi
+  if [ -f "/etc/init.d/${SERVICE}" ] && command -v rc-service >/dev/null 2>&1; then
+    rc-service "$SERVICE" stop 2>/dev/null || true
+    rc-update del "$SERVICE" default 2>/dev/null || true
+    rm -f "/etc/init.d/${SERVICE}" /var/log/infranest-agent.log
+  fi
+  if [ -d "/etc/sv/${SERVICE}" ]; then
+    sv stop "$SERVICE" 2>/dev/null || true
+    rm -f "/var/service/${SERVICE}" "/etc/service/${SERVICE}"
+    rm -rf "/etc/sv/${SERVICE}"
+  fi
   rm -f "${BIN_DIR}/infranest-agent"
   rm -rf "$CONF_DIR" "$STATE_DIR"
   if id "$USER_NAME" >/dev/null 2>&1; then
@@ -519,13 +529,79 @@ INFRANEST_UNIT_EOF
     warn "the service did not stay up. What it says:"
     systemctl status "$SERVICE" --no-pager --lines=10 2>&1 | sed 's/^/    /' || true
   fi
+elif command -v rc-update >/dev/null 2>&1 && [ -x /sbin/openrc-run ]; then
+  # OpenRC: Alpine, Gentoo, Artix (#3836). Embedded for the same reason as the systemd unit above, and CI
+  # holds it to packaging/infranest-agent.openrc the same way.
+  log "installing the OpenRC service"
+  cat > "/etc/init.d/${SERVICE}" <<'INFRANEST_OPENRC_EOF' || die "could not write the init script"
+#!/sbin/openrc-run
+# InfraNest monitoring agent, for OpenRC (Alpine and others without systemd).
+#
+# supervise-daemon restarts it if it exits, like the systemd unit's Restart=on-failure. It runs as its own
+# unprivileged user: OpenRC has no equivalent of the unit's sandboxing directives, so that user is the
+# guarantee here. The agent reads /etc/infranest/agent.conf itself.
+name="InfraNest agent"
+description="InfraNest monitoring agent"
+command="/usr/local/bin/infranest-agent"
+command_args="run"
+command_user="infranest-agent:infranest-agent"
+supervisor="supervise-daemon"
+respawn_delay=15
+respawn_max=0
+output_log="/var/log/infranest-agent.log"
+error_log="/var/log/infranest-agent.log"
+
+depend() {
+	need net
+	after firewall
+}
+
+start_pre() {
+	checkpath --file --owner infranest-agent:infranest-agent --mode 0640 /var/log/infranest-agent.log
+}
+INFRANEST_OPENRC_EOF
+  chmod 0755 "/etc/init.d/${SERVICE}"
+  rc-update add "$SERVICE" default >/dev/null 2>&1 || true
+  # `restart` for the same reason as systemd's: an upgrade must replace the running binary.
+  rc-service "$SERVICE" restart >/dev/null 2>&1 || rc-service "$SERVICE" start >/dev/null 2>&1 || true
+
+  if rc-service "$SERVICE" status >/dev/null 2>&1; then
+    log "service enabled and started"
+  else
+    warn "the service did not stay up. Its log is /var/log/infranest-agent.log"
+  fi
+elif command -v sv >/dev/null 2>&1 && [ -d /etc/sv ]; then
+  # runit: Void and others (#3836).
+  log "installing the runit service"
+  mkdir -p "/etc/sv/${SERVICE}"
+  cat > "/etc/sv/${SERVICE}/run" <<'INFRANEST_RUNIT_EOF' || die "could not write the run script"
+#!/bin/sh
+# InfraNest monitoring agent, for runit (Void and others). Goes in /etc/sv/infranest-agent/run.
+# runit restarts it if it exits. It runs as its own unprivileged user; the agent reads
+# /etc/infranest/agent.conf itself.
+exec 2>&1
+exec chpst -u infranest-agent:infranest-agent /usr/local/bin/infranest-agent run
+INFRANEST_RUNIT_EOF
+  chmod 0755 "/etc/sv/${SERVICE}/run"
+  # Where runsvdir looks differs by distribution: Void /var/service, Artix /run/runit/service, others
+  # /etc/service. The first that exists is the one this machine's runsvdir is watching.
+  svdir=""
+  for d in /var/service /run/runit/service /etc/service; do
+    if [ -d "$d" ]; then svdir="$d"; break; fi
+  done
+  if [ -n "$svdir" ]; then
+    ln -sfn "/etc/sv/${SERVICE}" "${svdir}/${SERVICE}"
+    sv restart "$SERVICE" >/dev/null 2>&1 || true
+    log "service linked into ${svdir}; runit starts it within a few seconds"
+  else
+    warn "runit is installed but no service directory was found. Link /etc/sv/${SERVICE} into the one runsvdir watches."
+  fi
 else
-  warn "no systemd here. The agent is installed but nothing is running it."
+  warn "no systemd, OpenRC or runit here. The agent is installed but nothing is running it."
   if [ "$DO_UPGRADE" -eq 1 ]; then
     warn "If it was already running, it is still running the old binary: restart it however this machine does."
   fi
-  warn "Start it however this machine starts things:  ${BIN_DIR}/infranest-agent run"
-  warn "On Alpine/OpenRC an init script goes in /etc/init.d/. See the README."
+  warn "Start it however this machine starts things, as the ${USER_NAME} user:  ${BIN_DIR}/infranest-agent run"
 fi
 
 echo
