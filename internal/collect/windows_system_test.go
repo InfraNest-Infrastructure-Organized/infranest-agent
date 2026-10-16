@@ -51,7 +51,7 @@ func TestAStoppedServiceIsFailedOnlyWithAnErrorExit(t *testing.T) {
 	if clean.ActiveState != "inactive" || never.ActiveState != "inactive" {
 		t.Fatalf("a service that stopped on purpose is not failed: %+v %+v", clean, never)
 	}
-	if broken.ActiveState != "failed" || broken.ExecMainStatus == nil || *broken.ExecMainStatus != 1066 {
+	if broken.ActiveState != "failed" || broken.ExecMainStatus == nil || *broken.ExecMainStatus != 1066 || broken.ExecMainCode == nil || *broken.ExecMainCode != 1 {
 		t.Fatalf("an error exit is failed: %+v", broken)
 	}
 }

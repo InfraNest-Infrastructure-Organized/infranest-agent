@@ -235,8 +235,12 @@ func windowsService(name, display string, st serviceStatusProcess) Service {
 	case serviceStopped:
 		svc.SubState = "stopped"
 		if st.Win32ExitCode != 0 && st.Win32ExitCode != errorServiceNeverStarted {
-			code := int32(st.Win32ExitCode)
-			svc.ActiveState, svc.Result, svc.ExecMainStatus = "failed", "exit-code", &code
+			// The contract sends the status with its si_code or not at all; a service that stopped with an
+			// exit code exited, which is CLD_EXITED (1). The status is the Win32 code, 32 bits wide —
+			// the receiver accepts the full int32 range since InfraNest #3837.
+			exited, status := int32(1), int32(st.Win32ExitCode)
+			svc.ActiveState, svc.Result = "failed", "exit-code"
+			svc.ExecMainCode, svc.ExecMainStatus = &exited, &status
 		} else {
 			svc.ActiveState = "inactive"
 		}
