@@ -252,6 +252,20 @@ jobs:
           check "control: pinned to ci.yml instead, gh"     foreign gh     INSTALLED install-pinned-to-ci.sh
           check "control: pinned to ci.yml instead, cosign" foreign cosign INSTALLED install-pinned-to-ci.sh
 
+  collect-windows:
+    name: The Windows collectors read a real Windows (InfraNest #3837)
+    runs-on: windows-latest
+    # The registry keys and the Service Control Manager structures are read through hand-written DLL
+    # bindings. A wrong offset or key path compiles on every platform and reads garbage only on Windows,
+    # so the tests that matter here run on Windows itself.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - run: go test -v -run "Windows|AutomaticServices|StoppedService" ./internal/collect/
+
   installer-windows:
     name: install.ps1 refuses a binary we did not build (${{ matrix.shell }})
     runs-on: windows-latest

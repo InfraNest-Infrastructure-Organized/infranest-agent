@@ -50,9 +50,7 @@ type Options struct {
 	ProcessArgs  bool
 	MaxProcesses int
 	CPUInterval  time.Duration
-	// Accepted and ignored: service units are a systemd concept, and Windows services are a different
-	// model that would need its own collector and its own rule kind rather than being squeezed into this
-	// one. Present so the field exists on every platform's Options and the runner needs no build tags.
+	// The Service Control Manager's automatic-start services, mapped onto the systemd shape (#3837).
 	Services   bool
 	Containers *ContainerTracker
 	// Accepted and ignored: certbot, Caddy and Traefik renewals are read from Linux paths.
@@ -72,6 +70,10 @@ type Options struct {
 // offered for "swap used" is commit charge minus physical, which is an approximation of a different thing.
 func Collect(opts Options) (Sample, error) {
 	s := Sample{CollectedAt: time.Now().UTC()}
+
+	// What the machine says about itself, and whether Windows is waiting for a restart (#3837).
+	sys := systemWindows()
+	s.System = &sys
 
 	if pct, err := collectCPUWindows(opts.CPUInterval); err != nil {
 		s.fail("cpu", err)
@@ -96,6 +98,15 @@ func Collect(opts Options) (Sample, error) {
 		s.fail("mounts", err)
 	} else {
 		s.Mounts = mounts
+	}
+
+	// The automatic-start services, so the failed-service rule works here too (#3837).
+	if opts.Services {
+		if services, err := servicesWindows(); err != nil {
+			s.fail("services", err)
+		} else {
+			s.Services = services
+		}
 	}
 
 	if opts.Processes {
