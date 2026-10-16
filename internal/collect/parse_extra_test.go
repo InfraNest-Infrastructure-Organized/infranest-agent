@@ -361,3 +361,20 @@ func TestTheSameProcessKeepsItsStartTimeBetweenReadings(t *testing.T) {
 		t.Fatalf("delta is %d, want 45", now.CPUTicks-was.CPUTicks)
 	}
 }
+
+// Inodes (InfraNest #3830): a filesystem out of inodes looks like free space everywhere else.
+func TestInodesAreCountedFromStatfs(t *testing.T) {
+	used, total := inodeCounts(6553600, 655360)
+	if used == nil || total == nil || *used != 5898240 || *total != 6553600 {
+		t.Fatalf("got %v %v", used, total)
+	}
+}
+
+func TestAFilesystemWithoutAFixedInodeTableReportsNothingRatherThanZero(t *testing.T) {
+	if used, total := inodeCounts(0, 0); used != nil || total != nil {
+		t.Fatal("btrfs reports zero inodes; that is not \"none used\"")
+	}
+	if used, _ := inodeCounts(10, 20); used != nil {
+		t.Fatal("more free than total is not a measurement")
+	}
+}

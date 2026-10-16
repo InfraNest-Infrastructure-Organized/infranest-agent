@@ -304,3 +304,16 @@ func splitNulUTF16(buf []uint16) []string {
 
 	return out
 }
+
+// inodeCounts turns statfs's total and free inode counts into used and total, or nothing where the
+// filesystem keeps no fixed table (btrfs, and others that allocate inodes on demand, report zero). Split
+// from the syscall so it can be tested on any machine.
+func inodeCounts(files, free uint64) (*int64, *int64) {
+	if files == 0 || free > files || files > 1<<62 {
+		return nil, nil
+	}
+
+	used, total := int64(files-free), int64(files)
+
+	return &used, &total
+}

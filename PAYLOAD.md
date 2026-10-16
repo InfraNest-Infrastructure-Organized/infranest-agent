@@ -6,7 +6,7 @@ This is a **public contract**. The agent is one implementation of it; anyone may
 endpoint does not care which is talking to it. So this document is the specification rather than a
 description of our code, and where the two disagree the endpoint's validation is the authority.
 
-**Contract version 10** — current as of agent `v0.14.0`.
+**Contract version 11** — current as of agent `v0.13.0`.
 
 Every change so far has been *additive*, and that is the rule rather than a run of luck: a field is added,
 never repurposed, and never made required after the fact. A sender written against version 1 keeps working
@@ -16,6 +16,7 @@ long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
+| 11 | `mounts[].inodes_used` / `inodes_total` — a filesystem that has run out of inodes while showing free space |
 | 10 | `system.auto_update` — whether unattended-upgrades or dnf-automatic installs updates and reboots by itself, and when |
 | 9 | `system.reboot_reason` and `system.newest_kernel` — why a reboot is required, now that it is reported on every Linux and not only Debian and Ubuntu |
 | 8 | `renewers` and `collectors.renewers` — what renews this machine's certificates (certbot, Caddy, Traefik), which names, and certbot's last run |
@@ -79,6 +80,7 @@ nothing rather than a guess.
 | `mounts[]` | array | Max 64 |
 | `mounts[].mount_point` | string ≤191 | |
 | `mounts[].device` | string ≤191 | |
+| `mounts[].inodes_used` / `inodes_total` | int | From the same `statfs`. A filesystem out of inodes refuses every new file while its bytes still show free space. **Absent where the filesystem keeps no fixed inode table** (btrfs reports zero), which is not "none used" |
 | `mounts[].used_bytes` / `total_bytes` | int | **No percentage.** The server computes it, so a percentage cannot disagree with its own bytes — which is what an alert would then fail to fire on |
 | `processes[]` | array | Max 32 |
 | `processes[].command` | string ≤255 | Executable name by default. Full command lines carry credentials often enough that shipping them must be asked for |

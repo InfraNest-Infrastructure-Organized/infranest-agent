@@ -62,6 +62,13 @@ type Mount struct {
 	Device     string `json:"device,omitempty"`
 	UsedBytes  int64  `json:"used_bytes"`
 	TotalBytes int64  `json:"total_bytes"`
+
+	// Inodes, from the same statfs (InfraNest #3830). A filesystem out of inodes refuses every new file
+	// while the bytes above still show free space — so the one figure people look at points away from
+	// the cause. Nil where the filesystem has no fixed inode table (btrfs reports zero), which is not
+	// "none used".
+	InodesUsed  *int64 `json:"inodes_used,omitempty"`
+	InodesTotal *int64 `json:"inodes_total,omitempty"`
 }
 
 // Service is one unit the machine was told to run, and what became of it.
