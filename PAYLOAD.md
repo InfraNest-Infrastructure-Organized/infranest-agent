@@ -6,7 +6,7 @@ This is a **public contract**. The agent is one implementation of it; anyone may
 endpoint does not care which is talking to it. So this document is the specification rather than a
 description of our code, and where the two disagree the endpoint's validation is the authority.
 
-**Contract version 8** — current as of agent `v0.12.0`.
+**Contract version 9** — current as of agent `v0.13.0`.
 
 Every change so far has been *additive*, and that is the rule rather than a run of luck: a field is added,
 never repurposed, and never made required after the fact. A sender written against version 1 keeps working
@@ -16,6 +16,7 @@ long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
+| 9 | `system.reboot_reason` and `system.newest_kernel` — why a reboot is required, now that it is reported on every Linux and not only Debian and Ubuntu |
 | 8 | `renewers` and `collectors.renewers` — what renews this machine's certificates (certbot, Caddy, Traefik), which names, and certbot's last run |
 | 7 | `system.cpus`, `system.pro` and `containers` — how many CPUs the kernel was given, whether Ubuntu Pro (Livepatch, ESM) is still attached, and the running containers with how often each has restarted |
 | 6 | `system.oom_kills` and `system.boot_id` — how many processes the kernel has killed for lack of memory since this boot, and which boot that is |
@@ -117,7 +118,9 @@ nothing rather than a guess.
 | `renewers[].unreadable` | bool | The store exists and refused the agent — Traefik's `acme.json` is always owner-only, Caddy's storage usually is. `source` names it; `mode` and `root_owned` say why, as in `disk_usage.unreadable[]`. Not a failure of the collector: it is the true answer to "can an unprivileged agent read this" |
 | `system.kernel` / `system.os` | string ≤128 | |
 | `system.pending_updates` / `security_updates` | int | Absent means "could not tell", which is not zero |
-| `system.reboot_required` | bool | |
+| `system.reboot_required` | bool | A reboot is needed to finish applying updates. False where nothing says so, which is not a check that nothing is pending |
+| `system.reboot_reason` | string ≤16 | Which evidence said so: `flag_file` (Debian/Ubuntu's `/var/run/reboot-required`), `zypper` (SUSE's `/run/reboot-needed`) or `newer_kernel` — a newer build of the running kernel is installed under `/lib/modules`. That last is judged only when the running kernel is itself installed there (so never in a container or on an unmanaged kernel), only against the same flavour, and only for directories `depmod` has written. Absent unless `reboot_required` is true |
+| `system.newest_kernel` | string ≤128 | The newer installed kernel, when the reason is `newer_kernel` |
 | `system.oom_kills` | int ≥0 | How many processes the kernel has killed for lack of memory **since this boot** — Linux's `oom_kill` in `/proc/vmstat`. A counter, not a level: `memory_percent` cannot see an OOM kill, because the kill is what frees the memory. The receiver alerts when it rises between pushes. Absent where the kernel keeps no such counter, which is not zero |
 | `system.boot_id` | string ≤64 | An identifier that changes on every boot — Linux's `/proc/sys/kernel/random/boot_id`. **Send it with `oom_kills`.** Without it a reboot is indistinguishable from a counter that did not move, and the receiver will not judge a rise it cannot place in a boot |
 | `system.cpus` | int ≥1 | CPUs the kernel will schedule this agent on. What the machine **has**, which after a resize is not what a provider's last sync says it bought — the receiver prefers this for capacity and keeps the provider's figure for the plan. Absent means "could not tell" |
