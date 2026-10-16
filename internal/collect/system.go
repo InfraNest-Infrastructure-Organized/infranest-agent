@@ -71,6 +71,10 @@ type System struct {
 	// cache could not be read — which is not "detached": a Debian box and an unreadable file both say
 	// nothing, and only a cache that says `attached: false` is a claim worth alerting on.
 	Pro *ProStatus `json:"pro,omitempty"`
+
+	// How the machine patches and reboots itself, when a tool for it is installed (InfraNest #3825). Nil
+	// where neither unattended-upgrades nor dnf-automatic is — which is "a person does it", not "off".
+	AutoUpdate *AutoUpdate `json:"auto_update,omitempty"`
 }
 
 // ProStatus is the part of `pro status` that decides whether a machine is still being patched.
@@ -127,6 +131,8 @@ func CollectSystem() System {
 	}
 
 	s.CPUs = runtime.NumCPU()
+
+	s.AutoUpdate = CollectAutoUpdate()
 
 	if f, err := os.Open(proStatusPath); err == nil {
 		if pro, ok := parseProStatus(io.LimitReader(f, maxProStatusBytes)); ok {
