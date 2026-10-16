@@ -6,7 +6,7 @@ This is a **public contract**. The agent is one implementation of it; anyone may
 endpoint does not care which is talking to it. So this document is the specification rather than a
 description of our code, and where the two disagree the endpoint's validation is the authority.
 
-**Contract version 11** — current as of agent `v0.13.0`.
+**Contract version 12** — current as of agent `v0.14.0`.
 
 Every change so far has been *additive*, and that is the rule rather than a run of luck: a field is added,
 never repurposed, and never made required after the fact. A sender written against version 1 keeps working
@@ -16,6 +16,7 @@ long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
+| 12 | `network_in_bps`, `network_out_bps`, `disk_read_bps`, `disk_write_bps` sent by the agent — throughput since the previous sample, which until now only a provider's metrics API supplied |
 | 11 | `mounts[].inodes_used` / `inodes_total` — a filesystem that has run out of inodes while showing free space |
 | 10 | `system.auto_update` — whether unattended-upgrades or dnf-automatic installs updates and reboots by itself, and when |
 | 9 | `system.reboot_reason` and `system.newest_kernel` — why a reboot is required, now that it is reported on every Linux and not only Debian and Ubuntu |
@@ -77,6 +78,8 @@ nothing rather than a guess.
 | `swap_used_bytes` | int | |
 | `load_1`, `load_5`, `load_15` | float | Omit where the concept does not exist. Windows has no load average, and Processor Queue Length is not one |
 | `uptime_seconds` | int | |
+| `network_in_bps` / `network_out_bps` | int ≥0 | Bytes per second received and sent **since the previous sample**, from `/proc/net/dev`. Only interfaces backed by a device (`/sys/class/net/<if>/device`), so a bridge or veth pair does not count a container's traffic twice; where none is (inside a container), every interface but loopback. Absent on the first sample after the agent starts |
+| `disk_read_bps` / `disk_write_bps` | int ≥0 | Bytes per second read and written since the previous sample, from `/proc/diskstats`, whole disks with a device link only — partitions, LVM, md, loop and zram are views of a disk already counted. Absent on the first sample, and where no such disk exists |
 | `mounts[]` | array | Max 64 |
 | `mounts[].mount_point` | string ≤191 | |
 | `mounts[].device` | string ≤191 | |

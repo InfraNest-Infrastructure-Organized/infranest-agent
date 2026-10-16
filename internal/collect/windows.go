@@ -57,6 +57,8 @@ type Options struct {
 	Containers *ContainerTracker
 	// Accepted and ignored: certbot, Caddy and Traefik renewals are read from Linux paths.
 	Renewers bool
+	// Accepted and ignored: the byte counters are read from Linux's /proc.
+	Traffic *TrafficTracker
 }
 
 // Collect takes one reading on Windows.
