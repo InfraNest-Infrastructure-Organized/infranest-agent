@@ -245,12 +245,15 @@ func statMount(e mountEntry) (Mount, bool) {
 	// is everyone who will hit the wall first.
 	avail := int64(st.Bavail) * blockSize
 
-	return Mount{
+	m := Mount{
 		MountPoint: clip(e.point, maxMountPoint),
 		Device:     clip(e.device, maxDevice),
 		TotalBytes: total,
 		UsedBytes:  total - avail,
-	}, true
+	}
+	m.InodesUsed, m.InodesTotal = inodeCounts(uint64(st.Files), uint64(st.Ffree))
+
+	return m, true
 }
 
 // readProcesses walks /proc for the busiest few.
