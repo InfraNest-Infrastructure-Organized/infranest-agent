@@ -194,6 +194,15 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# The platform before root (InfraNest #3838): asking a Mac user for sudo, only to refuse the platform
+# afterwards, sends them to fix the wrong thing.
+os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+case "$os" in
+  linux) ;;
+  darwin|freebsd) die "the agent does not support ${os} yet — it runs on Linux and Windows. Nothing was installed." ;;
+  *) die "this installer is for Linux. On Windows use install.ps1." ;;
+esac
+
 if [ "$(id -u)" -ne 0 ]; then
   if invoked_as_a_file; then
     die "this needs root, to create a system user and a service. Try: sudo sh $0 ..."
@@ -242,8 +251,6 @@ else
 fi
 
 # ── Which build ──────────────────────────────────────────────────────────────────────────────────────
-os="$(uname -s | tr '[:upper:]' '[:lower:]')"
-[ "$os" = "linux" ] || die "this installer is for Linux. On Windows use install.ps1."
 
 case "$(uname -m)" in
   x86_64|amd64)  arch="amd64" ;;

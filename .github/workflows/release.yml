@@ -92,10 +92,12 @@ jobs:
             -X main.commit=${{ steps.what.outputs.commit }} \
             -X main.date=${{ steps.what.outputs.date }}"
 
+          # Only the platforms that collect something (InfraNest #3838). macOS and FreeBSD still build in
+          # CI on every commit, so the compiler keeps seeing that code; publishing a binary that installs
+          # and then reports nothing read as a broken product rather than an unsupported platform.
           for target in \
             linux/amd64 linux/arm64 linux/arm linux/386 linux/riscv64 linux/ppc64le linux/s390x \
-            windows/amd64 windows/arm64 \
-            darwin/amd64 darwin/arm64 freebsd/amd64; do
+            windows/amd64 windows/arm64; do
             os=${target%/*}; arch=${target#*/}
             out="dist/infranest-agent_${os}_${arch}"
             [ "$os" = "windows" ] && out="${out}.exe"
