@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -31,10 +32,21 @@ type System struct {
 	PendingUpdates  *int `json:"pending_updates,omitempty"`
 	SecurityUpdates *int `json:"security_updates,omitempty"`
 
-	// The distribution says a reboot is needed. Debian and Ubuntu write a flag file; on distributions
-	// that do not, this stays false rather than guessing from kernel versions — a wrong "reboot required"
-	// costs somebody a maintenance window they did not need.
+	// A reboot is needed to finish applying updates. Debian and Ubuntu write a flag file and SUSE's libzypp
+	// writes another; everywhere else (RHEL, Alma, Rocky, Fedora, Arch…) nothing does, so the evidence is
+	// a newer kernel installed beside the running one (#3835). That comparison is held to the cases it
+	// cannot get wrong — see newerKernel — because a wrong "reboot required" costs somebody a maintenance
+	// window they did not need. False where no rule could tell, which is "nothing says so", not a check.
 	RebootRequired bool `json:"reboot_required"`
+
+	// Which evidence said so: `flag_file` (Debian/Ubuntu's /var/run/reboot-required), `zypper` (SUSE's
+	// /run/reboot-needed) or `newer_kernel`. Absent when no reboot is required. Sent so the server page
+	// can say *why*, which is what decides whether somebody believes it.
+	RebootReason string `json:"reboot_reason,omitempty"`
+
+	// The newest installed kernel, when it is what made a reboot required — "running 5.14.0-427, installed
+	// 5.14.0-503" is the sentence that makes the claim checkable.
+	NewestKernel string `json:"newest_kernel,omitempty"`
 
 	// How many processes the kernel has killed for lack of memory since this boot (#2810), from
 	// /proc/vmstat's `oom_kill`. A counter rather than a level, and that is the whole point: memory_percent
@@ -96,10 +108,7 @@ func CollectSystem() System {
 		_ = f.Close()
 	}
 
-	// Debian and Ubuntu. The file's existence *is* the signal — its contents are a human-readable note.
-	if _, err := os.Stat("/var/run/reboot-required"); err == nil {
-		s.RebootRequired = true
-	}
+	s.RebootRequired, s.RebootReason, s.NewestKernel = rebootRequired(s.Kernel)
 
 	if f, err := os.Open("/proc/vmstat"); err == nil {
 		if n, ok := parseOOMKills(f); ok {
@@ -127,6 +136,195 @@ func CollectSystem() System {
 	}
 
 	return s
+}
+
+// The flag files a distribution leaves when an update needs a reboot. The file's existence *is* the
+// signal — its contents, where there are any, are a human-readable note.
+var rebootFlags = []struct{ path, reason string }{
+	{"/var/run/reboot-required", "flag_file"}, // Debian, Ubuntu (update-notifier)
+	{"/run/reboot-needed", "zypper"},          // openSUSE, SLES (libzypp, on installing a kernel or glibc)
+}
+
+// Where installed kernels keep their modules. /lib is a link to /usr/lib on a merged-/usr system; the
+// second entry is for the ones where it is not.
+var modulesRoots = []string{"/lib/modules", "/usr/lib/modules"}
+
+// rebootRequired asks the flag files first, then the kernels on disk.
+func rebootRequired(running string) (bool, string, string) {
+	for _, flag := range rebootFlags {
+		if _, err := os.Stat(flag.path); err == nil {
+			return true, flag.reason, ""
+		}
+	}
+
+	if running == "" {
+		return false, "", ""
+	}
+
+	for _, root := range modulesRoots {
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			continue
+		}
+
+		var installed []string
+		for _, e := range entries {
+			// A kernel install runs depmod, which writes modules.dep. A directory without one is what a
+			// removed kernel leaves behind when a DKMS module or a stray file kept it from being deleted.
+			if e.IsDir() && fileExists(root+"/"+e.Name()+"/modules.dep") {
+				installed = append(installed, e.Name())
+			}
+		}
+
+		// The root that holds the running kernel is the one that describes this machine; another root, or
+		// none, is not evidence either way.
+		if !slices.Contains(installed, running) {
+			continue
+		}
+
+		if newest, ok := newerKernel(running, installed); ok {
+			return true, "newer_kernel", clip(newest, maxSystemField)
+		}
+
+		return false, "", ""
+	}
+
+	return false, "", ""
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+
+	return err == nil
+}
+
+// newerKernel reports the newest installed kernel that is a newer build of the running one.
+//
+// Three rules keep it from claiming a reboot that is not needed:
+//
+//   - **The running kernel must itself be installed.** In a container, or on a host booted from a kernel
+//     the package manager does not manage (a provider-supplied kernel, a custom build), /lib/modules
+//     describes some other kernel, and comparing against it is a guess. No directory for the running
+//     kernel, no answer.
+//   - **Same flavour only.** A `-lowlatency` kernel installed beside a `-generic` one, or a `+debug` beside
+//     the normal one, is a choice, not an update. Two versions are the same flavour when they are
+//     identical with their digits removed — "6.8.0-45-generic" and "6.8.0-47-generic" are, "…-generic"
+//     and "…-lowlatency" are not, nor is an el9 kernel and a fresh "+debug" one.
+//   - **Strictly newer**, compared the way rpm and dpkg compare versions: runs of digits as numbers, runs
+//     of letters as text, so 5.14.0-503 is newer than 5.14.0-427 and 6.10 newer than 6.9.
+//
+// Arch removes the running kernel's modules on upgrade, so the first rule makes it abstain there — a
+// missed reboot on Arch rather than a false one anywhere.
+func newerKernel(running string, installed []string) (string, bool) {
+	found := false
+	for _, v := range installed {
+		if v == running {
+			found = true
+
+			break
+		}
+	}
+	if !found {
+		return "", false
+	}
+
+	shape := kernelShape(running)
+	newest := running
+
+	for _, v := range installed {
+		if kernelShape(v) == shape && compareVersions(v, newest) > 0 {
+			newest = v
+		}
+	}
+
+	return newest, newest != running
+}
+
+// kernelShape is the version with every run of digits replaced by one '#'.
+func kernelShape(v string) string {
+	var b strings.Builder
+	inDigits := false
+
+	for _, r := range v {
+		if r >= '0' && r <= '9' {
+			if !inDigits {
+				b.WriteByte('#')
+			}
+			inDigits = true
+
+			continue
+		}
+		inDigits = false
+		b.WriteRune(r)
+	}
+
+	return b.String()
+}
+
+// compareVersions orders two version strings rpmvercmp-style: split into runs of digits and runs of
+// letters (anything else separates), digits compared as numbers, letters as text, a digit run newer than a
+// letter run, and the longer version newer when one is a prefix of the other. Returns -1, 0 or 1.
+func compareVersions(a, b string) int {
+	sa, sb := versionSegments(a), versionSegments(b)
+
+	for i := 0; i < len(sa) && i < len(sb); i++ {
+		x, y := sa[i], sb[i]
+		xNum, yNum := isDigit(x[0]), isDigit(y[0])
+
+		switch {
+		case xNum && !yNum:
+			return 1
+		case !xNum && yNum:
+			return -1
+		case xNum:
+			x, y = strings.TrimLeft(x, "0"), strings.TrimLeft(y, "0")
+			if len(x) != len(y) {
+				return sign(len(x) - len(y))
+			}
+		}
+
+		if c := strings.Compare(x, y); c != 0 {
+			return c
+		}
+	}
+
+	return sign(len(sa) - len(sb))
+}
+
+func versionSegments(v string) []string {
+	var out []string
+
+	for i := 0; i < len(v); {
+		c := v[i]
+		if !isDigit(c) && !isLetter(c) {
+			i++
+
+			continue
+		}
+
+		j := i
+		for j < len(v) && isDigit(v[j]) == isDigit(c) && (isDigit(v[j]) || isLetter(v[j])) {
+			j++
+		}
+		out = append(out, v[i:j])
+		i = j
+	}
+
+	return out
+}
+
+func isDigit(c byte) bool  { return c >= '0' && c <= '9' }
+func isLetter(c byte) bool { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }
+
+func sign(n int) int {
+	switch {
+	case n > 0:
+		return 1
+	case n < 0:
+		return -1
+	}
+
+	return 0
 }
 
 // The Ubuntu Pro client's status cache. World-readable by design — it is what lets `pro status` answer an
