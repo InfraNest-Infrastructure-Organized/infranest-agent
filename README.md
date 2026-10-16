@@ -85,9 +85,10 @@ One static binary per architecture, built with `CGO_ENABLED=0`, so the same Linu
 musl alike — Debian, Ubuntu, RHEL, Alpine, and anything else with a mounted `/proc`. Linux on amd64,
 arm64, armv7, 386, riscv64, ppc64le and s390x; Windows on amd64 and arm64.
 
-macOS and FreeBSD binaries are published too, and collect nothing — they build so the compiler and `go vet`
-see that code on every commit, and running one tells you plainly that the platform is not implemented
-rather than reporting a machine full of zeros. Do not install them expecting readings.
+macOS and FreeBSD are not supported, and no binaries are published for them. The code still builds for
+both in CI on every commit, so the compiler and `go vet` keep seeing it, and running a local build tells you
+plainly that the platform is not implemented rather than reporting a machine full of zeros. The installer
+says so before installing anything.
 
 Windows collects CPU, memory, disk and uptime, and processes when asked. Two things Linux reports are
 absent there, and are left absent rather than approximated:
