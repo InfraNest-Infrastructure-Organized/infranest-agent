@@ -90,8 +90,12 @@ both in CI on every commit, so the compiler and `go vet` keep seeing it, and run
 plainly that the platform is not implemented rather than reporting a machine full of zeros. The installer
 says so before installing anything.
 
-Windows collects CPU, memory, disk and uptime, and processes when asked. Two things Linux reports are
-absent there, and are left absent rather than approximated:
+Windows collects CPU, memory, disk and uptime, processes when asked, and — read from the registry and the
+Service Control Manager, without administrator rights — the Windows version and build, **whether Windows is
+waiting for a restart** (Windows Update's `RebootRequired` key or Component Based Servicing's
+`RebootPending`; not `PendingFileRenameOperations`, which installers leave set for days), and **the
+automatic-start services**: running, stopped, or stopped with an error exit, which is the only one reported
+as failed. Two things Linux reports are absent there, and are left absent rather than approximated:
 
 - **Load average** does not exist on Windows. Processor Queue Length is sometimes offered as an
   equivalent and is not one — it counts waiting threads rather than a decaying average of runnable work,
