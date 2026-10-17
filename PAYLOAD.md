@@ -6,7 +6,7 @@ This is a **public contract**. The agent is one implementation of it; anyone may
 endpoint does not care which is talking to it. So this document is the specification rather than a
 description of our code, and where the two disagree the endpoint's validation is the authority.
 
-**Contract version 12** — current as of agent `v0.14.0`.
+**Contract version 13** — current as of agent `v0.14.0`.
 
 Every change so far has been *additive*, and that is the rule rather than a run of luck: a field is added,
 never repurposed, and never made required after the fact. A sender written against version 1 keeps working
@@ -16,6 +16,7 @@ long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
+| 13 | `system.time_synced` and `system.time_error_ms` — whether the kernel's clock is synchronised, from `adjtimex` |
 | 12 | `network_in_bps`, `network_out_bps`, `disk_read_bps`, `disk_write_bps` sent by the agent — throughput since the previous sample, which until now only a provider's metrics API supplied |
 | 11 | `mounts[].inodes_used` / `inodes_total` — a filesystem that has run out of inodes while showing free space |
 | 10 | `system.auto_update` — whether unattended-upgrades or dnf-automatic installs updates and reboots by itself, and when |
@@ -135,6 +136,8 @@ nothing rather than a guess.
 | `system.auto_update.reboot_time` | string ≤32 | unattended-upgrades only, when `reboot` is true: `Automatic-Reboot-Time` as written — `HH:MM` in the machine's local time, or `now` (its default) |
 | `system.auto_update.reboot_with_users` | bool | unattended-upgrades only, when `reboot` is true: `Automatic-Reboot-WithUsers` (default true). False blocks the reboot while anybody is logged in |
 | `system.auto_update.utc_offset_minutes` | int | The machine's current offset from UTC, so `reboot_time` can be placed on the receiver's clock |
+| `system.time_synced` | bool | Whether the kernel considers its clock synchronised — `adjtimex`, read-only: not `TIME_ERROR` and `STA_UNSYNC` clear. The kernel's own view, which chrony, ntpd and timesyncd all report into. **A VM whose clock the hypervisor keeps (no NTP daemon) reads false while being right**, which is why the receiver alerts only for a machine it has seen synchronised. Absent where it cannot be asked |
+| `system.time_error_ms` | int ≥0 | The kernel's bound on the clock's error, in milliseconds (`maxerror`) |
 | `system.oom_kills` | int ≥0 | How many processes the kernel has killed for lack of memory **since this boot** — Linux's `oom_kill` in `/proc/vmstat`. A counter, not a level: `memory_percent` cannot see an OOM kill, because the kill is what frees the memory. The receiver alerts when it rises between pushes. Absent where the kernel keeps no such counter, which is not zero |
 | `system.boot_id` | string ≤64 | An identifier that changes on every boot — Linux's `/proc/sys/kernel/random/boot_id`. **Send it with `oom_kills`.** Without it a reboot is indistinguishable from a counter that did not move, and the receiver will not judge a rise it cannot place in a boot |
 | `system.cpus` | int ≥1 | CPUs the kernel will schedule this agent on. What the machine **has**, which after a resize is not what a provider's last sync says it bought — the receiver prefers this for capacity and keeps the provider's figure for the plan. Absent means "could not tell" |

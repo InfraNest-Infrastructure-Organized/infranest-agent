@@ -72,6 +72,13 @@ type System struct {
 	// nothing, and only a cache that says `attached: false` is a claim worth alerting on.
 	Pro *ProStatus `json:"pro,omitempty"`
 
+	// Whether the kernel's clock is synchronised, and its bound on the error in milliseconds (InfraNest
+	// #3832), from adjtimex. A drifting clock breaks TOTP, TLS validation and every log timestamp long
+	// before it drifts far enough for the server to refuse the agent's pushes. Nil where it cannot be
+	// asked (not Linux), which is not "synchronised".
+	TimeSynced  *bool  `json:"time_synced,omitempty"`
+	TimeErrorMs *int64 `json:"time_error_ms,omitempty"`
+
 	// How the machine patches and reboots itself, when a tool for it is installed (InfraNest #3825). Nil
 	// where neither unattended-upgrades nor dnf-automatic is — which is "a person does it", not "off".
 	AutoUpdate *AutoUpdate `json:"auto_update,omitempty"`
@@ -131,6 +138,8 @@ func CollectSystem() System {
 	}
 
 	s.CPUs = runtime.NumCPU()
+
+	s.TimeSynced, s.TimeErrorMs = readTimeSync()
 
 	s.AutoUpdate = CollectAutoUpdate()
 
@@ -477,4 +486,20 @@ func parseUpdateStamp(body string) (pending, security int, ok bool) {
 	}
 
 	return pending, security, ok
+}
+
+// The kernel's clock states and the status bit that matter here: TIME_ERROR is "not synchronised", and
+// STA_UNSYNC is set by the kernel when no synchronisation daemon has disciplined the clock recently.
+const (
+	timeError = 5
+	staUnsync = 0x0040
+)
+
+// timeSyncFrom turns adjtimex's answer into "synchronised?" and the kernel's bound on the error, in ms.
+// Split from the syscall so it can be tested anywhere.
+func timeSyncFrom(state int, status, maxErrorMicros int64) (*bool, *int64) {
+	synced := state != timeError && status&staUnsync == 0
+	errMs := maxErrorMicros / 1000
+
+	return &synced, &errMs
 }
