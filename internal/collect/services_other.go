@@ -18,3 +18,7 @@ func CollectServices() ([]Service, error) {
 
 // HasSystemd is false everywhere but Linux.
 func HasSystemd() bool { return false }
+
+// ServicesAvailable is whether this machine has a service manager the agent can ask: on Windows the
+// Service Control Manager is always there (InfraNest #3837); macOS and FreeBSD have no collector.
+func ServicesAvailable() bool { return runtime.GOOS == "windows" }
