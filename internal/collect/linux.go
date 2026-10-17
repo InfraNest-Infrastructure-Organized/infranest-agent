@@ -35,6 +35,8 @@ type Options struct {
 	Renewers bool
 	// CPUInterval is how long to wait between the two /proc/stat readings a percentage needs.
 	CPUInterval time.Duration
+	// Traffic turns the byte counters into rates between samples (#3831). Skipped when nil.
+	Traffic *TrafficTracker
 }
 
 // Collect takes one reading.
@@ -74,6 +76,10 @@ func Collect(opts Options) (Sample, error) {
 		s.fail("uptime", err)
 	} else {
 		s.Uptime = i64(up)
+	}
+
+	if opts.Traffic != nil {
+		s.NetworkInBps, s.NetworkOutBps, s.DiskReadBps, s.DiskWriteBps = opts.Traffic.observe(readTraffic())
 	}
 
 	if mounts, err := readMounts(); err != nil {

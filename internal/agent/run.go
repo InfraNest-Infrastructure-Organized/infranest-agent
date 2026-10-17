@@ -79,6 +79,7 @@ type Runner struct {
 
 	// Each container's last start, between collections (#2809). Made on first use by containerTracker.
 	containers *collect.ContainerTracker
+	traffic    *collect.TrafficTracker
 
 	// The plan's storage cadence, as last stated by a push response (#886). Zero until one says.
 	serverInterval time.Duration
@@ -166,6 +167,15 @@ func (r *Runner) containerTracker() *collect.ContainerTracker {
 	return r.containers
 }
 
+// Held for the life of the process, like the container tracker: a rate needs the previous counters.
+func (r *Runner) trafficTracker() *collect.TrafficTracker {
+	if r.traffic == nil {
+		r.traffic = collect.NewTrafficTracker()
+	}
+
+	return r.traffic
+}
+
 // collectOnce takes one reading and spools it. Never returns an error: a collector that failed is
 // recorded in the reading itself, and a spool that cannot be written is logged rather than fatal —
 // stopping the agent because one write failed would turn a full disk into a monitoring outage, at
@@ -179,6 +189,7 @@ func (r *Runner) collectOnce(seq int64, state *State) {
 		Services:     r.Config.Services,
 		Containers:   r.containerTracker(),
 		Renewers:     r.Config.Renewers,
+		Traffic:      r.trafficTracker(),
 	})
 	if err != nil {
 		r.logf("collection failed: %v", err)

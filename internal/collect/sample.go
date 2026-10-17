@@ -25,6 +25,14 @@ type Sample struct {
 	Load15        *float64 `json:"load_15,omitempty"`
 	Uptime        *int64   `json:"uptime_seconds,omitempty"`
 
+	// Throughput since the previous sample, bytes per second (InfraNest #3831): physical interfaces and
+	// whole disks only, so nothing is counted twice. Absent on the first sample after the agent starts,
+	// which has nothing to measure against.
+	NetworkInBps  *int64 `json:"network_in_bps,omitempty"`
+	NetworkOutBps *int64 `json:"network_out_bps,omitempty"`
+	DiskReadBps   *int64 `json:"disk_read_bps,omitempty"`
+	DiskWriteBps  *int64 `json:"disk_write_bps,omitempty"`
+
 	Mounts    []Mount   `json:"mounts,omitempty"`
 	Processes []Process `json:"processes,omitempty"`
 
