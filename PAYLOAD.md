@@ -6,7 +6,7 @@ This is a **public contract**. The agent is one implementation of it; anyone may
 endpoint does not care which is talking to it. So this document is the specification rather than a
 description of our code, and where the two disagree the endpoint's validation is the authority.
 
-**Contract version 14** — current as of agent `v0.14.0`.
+**Contract version 15** — current as of agent `v0.14.0`.
 
 Every change so far has been *additive*, and that is the rule rather than a run of luck: a field is added,
 never repurposed, and never made required after the fact. A sender written against version 1 keeps working
@@ -16,6 +16,7 @@ long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
+| 15 | `pressure_cpu`, `pressure_memory`, `pressure_memory_full`, `pressure_io`, `pressure_io_full` — how long work waited on each resource, from Linux pressure stall information |
 | 14 | `system.raid[]` — Linux software RAID arrays and whether any is running degraded |
 | 13 | `system.time_synced` and `system.time_error_ms` — whether the kernel's clock is synchronised, from `adjtimex` |
 | 12 | `network_in_bps`, `network_out_bps`, `disk_read_bps`, `disk_write_bps` sent by the agent — throughput since the previous sample, which until now only a provider's metrics API supplied |
@@ -80,6 +81,8 @@ nothing rather than a guess.
 | `swap_used_bytes` | int | |
 | `load_1`, `load_5`, `load_15` | float | Omit where the concept does not exist. Windows has no load average, and Processor Queue Length is not one |
 | `uptime_seconds` | int | |
+| `pressure_cpu` / `pressure_memory` / `pressure_io` | float 0–100 | Pressure stall information from `/proc/pressure/*`: the percentage of the last minute (`avg60`) in which **at least one** runnable task was stalled on that resource. Says how long work waited, which a load average — a count of tasks — cannot. Absent on kernels without PSI (before 4.20, or built without it) |
+| `pressure_memory_full` / `pressure_io_full` | float 0–100 | The same for **all** runnable tasks stalled at once — time in which the machine did no useful work. CPU has none worth sending: system-wide it is always zero |
 | `network_in_bps` / `network_out_bps` | int ≥0 | Bytes per second received and sent **since the previous sample**, from `/proc/net/dev`. Only interfaces backed by a device (`/sys/class/net/<if>/device`), so a bridge or veth pair does not count a container's traffic twice; where none is (inside a container), every interface but loopback. Absent on the first sample after the agent starts |
 | `disk_read_bps` / `disk_write_bps` | int ≥0 | Bytes per second read and written since the previous sample, from `/proc/diskstats`, whole disks with a device link only — partitions, LVM, md, loop and zram are views of a disk already counted. Absent on the first sample, and where no such disk exists |
 | `mounts[]` | array | Max 64 |

@@ -74,6 +74,8 @@ func Collect(opts Options) (Sample, error) {
 		s.Load1, s.Load5, s.Load15 = f64(one), f64(five), f64(fifteen)
 	}
 
+	readPressure(&s)
+
 	if up, err := readUptime(); err != nil {
 		s.fail("uptime", err)
 	} else {
