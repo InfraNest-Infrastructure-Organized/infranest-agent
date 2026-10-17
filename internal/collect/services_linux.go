@@ -45,6 +45,9 @@ func CollectServices() ([]Service, error) {
 // HasSystemd is sd_booted(): whether this machine was booted by systemd. On Alpine (OpenRC), Void (runit)
 // and inside most containers it was not, and there is no unit list to ask for — so the services collector
 // is skipped there rather than reported failing on every sample (InfraNest #3836).
+// ServicesAvailable is whether this machine has a service manager the agent can ask: systemd here.
+func ServicesAvailable() bool { return HasSystemd() }
+
 func HasSystemd() bool {
 	return fileExists("/run/systemd/system")
 }

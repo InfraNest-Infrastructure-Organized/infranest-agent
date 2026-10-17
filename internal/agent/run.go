@@ -316,7 +316,7 @@ func (r *Runner) sendOnce(ctx context.Context, url *string, state *State) error 
 		Processes:   r.Config.Processes,
 		ProcessArgs: r.Config.ProcessArgs,
 		// Only where there is a systemd to ask (#3836): on OpenRC or runit it is not switched on, it is absent.
-		Services: r.Config.Services && collect.HasSystemd(),
+		Services: r.Config.Services && collect.ServicesAvailable(),
 		Renewers: r.Config.Renewers,
 	})
 
