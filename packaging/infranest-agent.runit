@@ -1,0 +1,6 @@
+#!/bin/sh
+# InfraNest monitoring agent, for runit (Void and others). Goes in /etc/sv/infranest-agent/run.
+# runit restarts it if it exits. It runs as its own unprivileged user; the agent reads
+# /etc/infranest/agent.conf itself.
+exec 2>&1
+exec chpst -u infranest-agent:infranest-agent /usr/local/bin/infranest-agent run

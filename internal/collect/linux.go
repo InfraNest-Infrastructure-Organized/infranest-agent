@@ -96,7 +96,7 @@ func Collect(opts Options) (Sample, error) {
 		}
 	}
 
-	if opts.Services {
+	if opts.Services && HasSystemd() {
 		// Failure here is recorded like any other collector's and never raised. There are ordinary
 		// reasons for it — a container with no D-Bus socket, a sandbox that will not allow AF_UNIX, a
 		// machine that does not run systemd at all — and none of them should cost the reading beside it.

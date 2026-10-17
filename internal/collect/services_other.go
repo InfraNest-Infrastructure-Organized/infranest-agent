@@ -15,3 +15,6 @@ import (
 func CollectServices() ([]Service, error) {
 	return nil, fmt.Errorf("service units are a systemd concept and %s does not have one", runtime.GOOS)
 }
+
+// HasSystemd is false everywhere but Linux.
+func HasSystemd() bool { return false }

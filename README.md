@@ -275,14 +275,21 @@ sudo sh install.sh --from ./infranest-agent --token sat_YOUR_TOKEN
 
 ### If this machine does not use systemd
 
-Alpine, and anything on OpenRC, runit or s6. The installer still installs the agent, tells you it could
-not start it, and leaves you to wire it up. The command it needs to run is:
+**OpenRC** (Alpine, Gentoo, Artix) and **runit** (Void) are set up by the installer too. On OpenRC it writes
+`/etc/init.d/infranest-agent`, run by `supervise-daemon` so it is restarted if it exits, adds it to the
+`default` runlevel and logs to `/var/log/infranest-agent.log`. On runit it writes
+`/etc/sv/infranest-agent/run` and links it into `/var/service` (or `/etc/service`). Both scripts are embedded
+in the installer and held by CI to the copies in `packaging/`, and both run the agent as its own
+unprivileged user — these init systems have no equivalent of the systemd unit's sandboxing, so that user is
+the guarantee there. The service collector is skipped on these machines rather than reported failing:
+there is no unit list to ask.
+
+Anything else (s6, a plain container), the installer installs the agent and tells you it could not start
+it. The command to run, as the `infranest-agent` user, is:
 
 ```sh
 /usr/local/bin/infranest-agent run
 ```
-
-Run it as the `infranest-agent` user, with `/etc/infranest/agent.conf` in its environment.
 
 ## How it runs
 
