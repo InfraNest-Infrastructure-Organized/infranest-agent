@@ -86,9 +86,11 @@ var traefikStores = []string{
 }
 
 // readRenewers looks for every renewer under root ("/" outside tests). Never fails: a tool that is not
-// installed contributes nothing, and one whose files refused us contributes an Unreadable entry.
+// installed contributes nothing, and one whose files refused us contributes an Unreadable entry. Never
+// nil either: none found is `[]` on the wire, which clears the server's list, where `null` read as "not
+// collected" and kept the last one standing (InfraNest #4100).
 func readRenewers(root string) []Renewer {
-	out := readCertbot(root)
+	out := append([]Renewer{}, readCertbot(root)...)
 	out = append(out, readCaddy(root)...)
 	out = append(out, readTraefik(root)...)
 
