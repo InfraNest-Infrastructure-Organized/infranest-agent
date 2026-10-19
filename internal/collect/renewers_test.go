@@ -210,3 +210,66 @@ func TestNothingInstalledIsAnEmptyList(t *testing.T) {
 		t.Fatalf("want none, got %+v", got)
 	}
 }
+
+// What runs after a renewal (InfraNest #4066): the installer reloads its own web server; otherwise a
+// deploy or post hook has to, and `[]` says none does.
+func TestCertbotSaysWhatRunsAfterARenewal(t *testing.T) {
+	webroot := parseCertbotRenewal("example.com", strings.NewReader(webrootConf))
+	if webroot.Installer != "" || len(webroot.hooks) != 0 {
+		t.Fatalf("webroot sets no installer and no hook: %+v %v", webroot.Installer, webroot.hooks)
+	}
+	nginx := parseCertbotRenewal("shop.example.org-0001", strings.NewReader(nginxConf))
+	if nginx.Installer != "nginx" {
+		t.Fatalf("installer = %q", nginx.Installer)
+	}
+	hooked := parseCertbotRenewal("a.example.com", strings.NewReader("[renewalparams]\nauthenticator = webroot\ninstaller = None\nrenew_hook = systemctl reload nginx\npost_hook = None\n"))
+	if hooked.Installer != "" || !reflect.DeepEqual(hooked.hooks, map[string]bool{"deploy": true}) {
+		t.Fatalf("renew_hook is the deploy hook, None is unset: %q %v", hooked.Installer, hooked.hooks)
+	}
+}
+
+func TestNoHookAnywhereIsAnEmptyListAndAGlobalOneCounts(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, filepath.Join(root, certbotRenewalDir, "example.com.conf"), []byte(webrootConf), 0o644)
+	// A README in the hooks directory is not a hook: certbot runs only executables.
+	writeFixture(t, filepath.Join(root, certbotHooksDir, "deploy", "README"), []byte("hooks go here"), 0o644)
+
+	got := readRenewers(root)
+	if got[0].Hooks == nil || len(*got[0].Hooks) != 0 {
+		t.Fatalf("want [], got %v", got[0].Hooks)
+	}
+	out, _ := json.Marshal(got[0])
+	if !strings.Contains(string(out), `"hooks":[]`) {
+		t.Fatalf("an empty list must be sent, not dropped: %s", out)
+	}
+
+	writeFixture(t, filepath.Join(root, certbotHooksDir, "post", "reload-nginx.sh"), []byte("#!/bin/sh\nsystemctl reload nginx\n"), 0o755)
+	writeFixture(t, filepath.Join(root, certbotCliIni), []byte("# defaults\ndeploy-hook = /usr/local/bin/notify\n"), 0o644)
+	got = readRenewers(root)
+	if got[0].Hooks == nil || !reflect.DeepEqual(*got[0].Hooks, []string{"deploy", "post"}) {
+		t.Fatalf("want [deploy post], got %v", got[0].Hooks)
+	}
+	if out, _ := json.Marshal(got[0]); strings.Contains(string(out), "notify") || strings.Contains(string(out), "systemctl") {
+		t.Fatalf("a hook's command left the machine: %s", out)
+	}
+}
+
+func TestAHooksDirectoryThatRefusedUsIsUnknownNotNone(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads owner-only directories; run unprivileged to exercise the refusal")
+	}
+	root := t.TempDir()
+	writeFixture(t, filepath.Join(root, certbotRenewalDir, "example.com.conf"), []byte(webrootConf), 0o644)
+	dir := filepath.Join(root, certbotHooksDir, "deploy")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	if got := readRenewers(root); got[0].Hooks != nil {
+		t.Fatalf("want unknown, got %v", *got[0].Hooks)
+	}
+}
