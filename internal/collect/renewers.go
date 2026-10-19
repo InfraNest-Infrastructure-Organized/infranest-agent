@@ -42,6 +42,15 @@ type Renewer struct {
 	Source string `json:"source,omitempty"`
 	// certbot's authenticator: webroot, nginx, apache, standalone, dns-cloudflare…
 	Authenticator string `json:"authenticator,omitempty"`
+	// certbot's installer — nginx or apache — which reloads that web server itself after a renewal. Absent
+	// where there is none, which is the common case for webroot, standalone and DNS authenticators.
+	Installer string `json:"installer,omitempty"`
+	// What else certbot runs after renewing this certificate (InfraNest #4066): `deploy` (a deploy hook — the
+	// lineage's `renew_hook`, an executable in `renewal-hooks/deploy/`, or `deploy-hook` in `cli.ini`) and
+	// `post` (the same three places for post hooks). Only which kinds, never the commands, which can carry
+	// secrets. `[]` means every place was read and none is set: a renewal then changes the files and nothing
+	// tells the web server. Absent where a place could not be read, which is not "none".
+	Hooks *[]string `json:"hooks,omitempty"`
 
 	// The timer (or service) that runs it, and what systemd recorded about its last run: when the timer
 	// last fired, how the service last finished (`success`, or systemd's own failure word), and when it
@@ -71,6 +80,13 @@ const (
 
 // Where each tool keeps what it renews, on the layouts its packages install.
 const certbotRenewalDir = "/etc/letsencrypt/renewal"
+
+// Where certbot looks for hooks besides a lineage's own config: a directory per kind, whose executables it
+// runs for every renewal, and the global defaults file.
+const (
+	certbotHooksDir = "/etc/letsencrypt/renewal-hooks"
+	certbotCliIni   = "/etc/letsencrypt/cli.ini"
+)
 
 var caddyStores = []string{
 	"/var/lib/caddy/.local/share/caddy/certificates",
@@ -109,6 +125,8 @@ func readCertbot(root string) []Renewer {
 		return []Renewer{unreadable("certbot", dir, certbotRenewalDir)}
 	}
 
+	global, globalKnown := readCertbotGlobalHooks(root)
+
 	var out []Renewer
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".conf") {
@@ -126,6 +144,7 @@ func readCertbot(root string) []Renewer {
 		r := parseCertbotRenewal(strings.TrimSuffix(e.Name(), ".conf"), io.LimitReader(f, maxRenewerFileBytes))
 		_ = f.Close()
 		r.Source = clip(shown, maxRenewerSource)
+		r.Hooks = mergeHooks(r.hooks, global, globalKnown)
 
 		// The certificate itself, when this user may read it — on most installs `live/` is root-only, and
 		// the names then come from the config. Read through root so tests can point it at a fixture.
@@ -143,6 +162,8 @@ func readCertbot(root string) []Renewer {
 type certbotRenewal struct {
 	Renewer
 	certPath string
+	// The hook kinds the lineage's own config sets.
+	hooks map[string]bool
 }
 
 // A lineage certbot had to disambiguate: `example.com-0001` is a second certificate for example.com.
@@ -152,7 +173,7 @@ var lineageSuffix = regexp.MustCompile(`-\d{4}$`)
 // top, `[renewalparams]`, and `[[webroot_map]]` with one `domain = path` line per name. Split from the file
 // read so captured configs can be tested anywhere.
 func parseCertbotRenewal(lineage string, r io.Reader) certbotRenewal {
-	out := certbotRenewal{Renewer: Renewer{Tool: "certbot", Name: clip(lineage, 255)}}
+	out := certbotRenewal{Renewer: Renewer{Tool: "certbot", Name: clip(lineage, 255)}, hooks: map[string]bool{}}
 	section := ""
 	var webroot []string
 
@@ -178,6 +199,13 @@ func parseCertbotRenewal(lineage string, r io.Reader) certbotRenewal {
 			out.certPath = value
 		case section == "renewalparams" && key == "authenticator":
 			out.Authenticator = clip(value, maxAuthenticator)
+		case section == "renewalparams" && key == "installer" && !isNone(value):
+			out.Installer = clip(value, maxAuthenticator)
+		// certbot stores a deploy hook as `renew_hook`, its old name.
+		case section == "renewalparams" && (key == "renew_hook" || key == "deploy_hook") && !isNone(value):
+			out.hooks["deploy"] = true
+		case section == "renewalparams" && key == "post_hook" && !isNone(value):
+			out.hooks["post"] = true
 		case section == "webroot_map":
 			webroot = append(webroot, key)
 		}
@@ -190,6 +218,99 @@ func parseCertbotRenewal(lineage string, r io.Reader) certbotRenewal {
 	}
 
 	return out
+}
+
+// isNone is configobj's empty value: certbot writes `None` for an option that was not set.
+func isNone(value string) bool {
+	return value == "" || value == "None"
+}
+
+// readCertbotGlobalHooks reads the hook kinds certbot runs for every lineage: an executable file in
+// `renewal-hooks/deploy/` or `post/`, or `deploy-hook`/`renew-hook`/`post-hook` in `cli.ini`. A place that
+// does not exist sets nothing; one that exists and refused us makes the answer unknown (`known` false).
+func readCertbotGlobalHooks(root string) (kinds map[string]bool, known bool) {
+	kinds = map[string]bool{}
+	known = true
+	for _, kind := range []string{"deploy", "post"} {
+		entries, err := os.ReadDir(filepath.Join(root, certbotHooksDir, kind))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			known = false
+
+			continue
+		}
+		for _, e := range entries {
+			info, err := e.Info()
+			// certbot runs only executable regular files; a README or a disabled script is not a hook.
+			if err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
+				kinds[kind] = true
+			}
+		}
+	}
+
+	f, err := os.Open(filepath.Join(root, certbotCliIni))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		known = false
+	default:
+		for k := range parseCertbotCliIni(io.LimitReader(f, maxRenewerFileBytes)) {
+			kinds[k] = true
+		}
+		_ = f.Close()
+	}
+
+	return kinds, known
+}
+
+// parseCertbotCliIni reads the hook kinds `cli.ini` sets: `key = value` (or a bare key) per line, the
+// command-line option names without their dashes.
+func parseCertbotCliIni(r io.Reader) map[string]bool {
+	kinds := map[string]bool{}
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		key, value, _ := strings.Cut(line, "=")
+		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
+		if isNone(value) {
+			continue
+		}
+		switch strings.ReplaceAll(key, "_", "-") {
+		case "deploy-hook", "renew-hook":
+			kinds["deploy"] = true
+		case "post-hook":
+			kinds["post"] = true
+		}
+	}
+
+	return kinds
+}
+
+// mergeHooks is the lineage's hook kinds plus the global ones, sorted. Unknown (nil) when a global place
+// could not be read and the lineage sets none itself — one it does set is known whatever the rest says.
+func mergeHooks(lineage, global map[string]bool, globalKnown bool) *[]string {
+	all := map[string]bool{}
+	for k := range lineage {
+		all[k] = true
+	}
+	for k := range global {
+		all[k] = true
+	}
+	if !globalKnown && len(all) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(all))
+	for k := range all {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+
+	return &out
 }
 
 // readCaddy reads Caddy's certificate metadata: `<store>/<issuer>/<name>/<name>.json` and the `.crt` beside

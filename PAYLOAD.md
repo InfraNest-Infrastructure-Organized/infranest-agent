@@ -6,7 +6,7 @@ This is a **public contract**. The agent is one implementation of it; anyone may
 endpoint does not care which is talking to it. So this document is the specification rather than a
 description of our code, and where the two disagree the endpoint's validation is the authority.
 
-**Contract version 15** — current as of agent `v0.14.0`.
+**Contract version 16** — current as of agent `v0.14.0`.
 
 Every change so far has been *additive*, and that is the rule rather than a run of luck: a field is added,
 never repurposed, and never made required after the fact. A sender written against version 1 keeps working
@@ -16,6 +16,7 @@ long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
+| 16 | `renewers[].installer` and `renewers[].hooks` — whether anything tells the web server about a certbot renewal: the installer plugin, or a deploy or post hook |
 | 15 | `pressure_cpu`, `pressure_memory`, `pressure_memory_full`, `pressure_io`, `pressure_io_full` — how long work waited on each resource, from Linux pressure stall information |
 | 14 | `system.raid[]` — Linux software RAID arrays and whether any is running degraded |
 | 13 | `system.time_synced` and `system.time_error_ms` — whether the kernel's clock is synchronised, from `adjtimex` |
@@ -122,6 +123,8 @@ nothing rather than a guess.
 | `renewers[].not_after` | RFC3339 | The certificate's expiry, **only when its file could be read** — on most certbot installs `live/` is root-only and this is absent |
 | `renewers[].source` | string ≤512 | The file this was read from, or the store that refused it |
 | `renewers[].authenticator` | string ≤64 | certbot's: `webroot`, `nginx`, `apache`, `standalone`, `dns-…` |
+| `renewers[].installer` | string ≤64 | certbot's installer — `nginx` or `apache` — which reloads that web server itself after a renewal. Absent where there is none (`installer = None`, or not set), the usual case with `webroot`, `standalone` and DNS authenticators |
+| `renewers[].hooks` | array of string | certbot only: which kinds of hook run after renewing this certificate — `deploy` (the lineage's `renew_hook`, an executable file in `/etc/letsencrypt/renewal-hooks/deploy/`, or `deploy-hook`/`renew-hook` in `/etc/letsencrypt/cli.ini`) and `post` (`post_hook`, `renewal-hooks/post/`, `post-hook`). **Never the commands**, which can carry secrets. `[]` means every one of those places was read and none sets a hook: without an installer, a renewal then replaces the files and nothing tells the web server, which keeps serving the old certificate. **Absent is not `[]`**: a hooks directory or `cli.ini` that exists and refused the agent makes the answer unknown — unless the lineage sets a hook itself, which is known whatever the rest says. Hooks in root's own `~/.config/letsencrypt/cli.ini` are not readable and not seen |
 | `renewers[].unit` | string ≤255 | The systemd timer that runs it. Absent for certbot from cron, and for Caddy, which renews in-process |
 | `renewers[].last_run_at` | RFC3339 | When that timer last fired. **Absent is not "never"** — it is "systemd could not say" |
 | `renewers[].last_result` | string ≤32 | How the renewal service last finished, systemd's own word: `success`, or `exit-code`, `timeout`, `signal`… — one `certbot renew` run renews every lineage, so this is every certbot certificate's result |
