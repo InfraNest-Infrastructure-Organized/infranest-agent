@@ -205,9 +205,23 @@ func TestARefusedStoreIsReportedAndAMissingOneIsNot(t *testing.T) {
 	}
 }
 
+// An empty list, on the wire too: a nil slice marshals as `null`, which the receiver once read as "not
+// collected" and kept the last renewer a server had reported, for ever (InfraNest #4100).
 func TestNothingInstalledIsAnEmptyList(t *testing.T) {
-	if got := readRenewers(t.TempDir()); len(got) != 0 {
+	got := readRenewers(t.TempDir())
+	if len(got) != 0 {
 		t.Fatalf("want none, got %+v", got)
+	}
+	encoded, err := json.Marshal(Sample{Renewers: &got})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if string(fields["renewers"]) != "[]" {
+		t.Fatalf(`want "renewers":[], got %s`, fields["renewers"])
 	}
 }
 
