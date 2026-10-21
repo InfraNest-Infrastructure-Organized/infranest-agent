@@ -112,6 +112,15 @@ func Collect(opts Options) (Sample, error) {
 				s.Containers = &containers
 			}
 		}
+
+		// The clock (#4391) is asked over the same bus, so it shares this switch. A failure leaves the
+		// field absent — the receiver treats absent as "cannot tell", never as synchronised.
+		if synced, err := readTimeSync(); err == nil {
+			if s.System == nil {
+				s.System = &System{}
+			}
+			s.System.TimeSynced = &synced
+		}
 	}
 
 	if opts.Renewers {
