@@ -469,6 +469,58 @@ jobs:
           if ($script:failed) { Write-Host "$($script:failed.Count) case(s) failed: $($script:failed -join ', ')"; exit 1 }
           exit 0
 
+  sandbox:
+    name: It runs under the unit the installer writes (InfraNest #4392)
+    runs-on: ubuntu-latest
+    # Every other check runs the agent unsandboxed, which is not where it lives. The unit install.sh writes
+    # forbids syscalls, address families and paths, and breaking one of those rules is not an error the
+    # agent can handle: a forbidden syscall is SIGSYS, and the server goes silent. v0.14.0 shipped exactly
+    # that (#4391) — a read-only `adjtimex` that passed every test here and was killed on every real server.
+    #
+    # So this runs one full collection (`print`, everything on) under the unit's own [Service] settings,
+    # read out of install.sh rather than copied, so the test cannot drift from what ships. Only the lines
+    # that make it a long-running daemon are dropped: ExecStart, Type, Restart*, EnvironmentFile.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Build and install the binary, as the installer does
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go build -o infranest-agent ./cmd/infranest-agent
+          sudo install -m 0755 infranest-agent /usr/local/bin/infranest-agent
+          sudo useradd --system --no-create-home --shell /usr/sbin/nologin infranest-agent
+          sudo install -d -o infranest-agent -g infranest-agent /var/lib/infranest-agent
+
+      - name: Collect once under the unit's sandbox
+        run: |
+          # The [Service] section of the heredoc install.sh writes, minus comments and the daemon lines.
+          props=$(sed -n "/<<'INFRANEST_UNIT_EOF'/,/^INFRANEST_UNIT_EOF/p" install.sh \
+            | sed -n '/^\[Service\]/,/^\[/p' \
+            | grep -E '^[A-Za-z]+=' \
+            | grep -vE '^(ExecStart|Type|Restart|RestartSec|EnvironmentFile)=')
+          # Guard against the extraction silently finding nothing, which would run the agent unsandboxed
+          # and pass.
+          for must in SystemCallFilter ProtectClock ProtectSystem RestrictAddressFamilies User; do
+            grep -q "^$must=" <<<"$props" || { echo "::error::$must not found in install.sh's unit — the extraction is broken"; exit 1; }
+          done
+          args=()
+          while IFS= read -r line; do args+=(-p "$line"); done <<<"$props"
+          printf '  %s\n' "${args[@]}" | grep -v '^  -p$'
+
+          # --wait makes systemd-run exit non-zero when the unit fails, including when it is killed.
+          if ! sudo systemd-run --quiet --wait --pipe --collect --unit=agent-sandbox-check \
+               "${args[@]}" /usr/local/bin/infranest-agent print > sample.json; then
+            echo "::error::The agent failed under its own unit's sandbox. If it was killed (SIGSYS), a collector made a syscall the unit forbids."
+            sudo journalctl -k --no-pager | grep -i -E 'seccomp|audit' | tail -5 || true
+            exit 1
+          fi
+          python3 -c "import json; s=json.load(open('sample.json')); print('collected; system.time_synced =', (s.get('system') or {}).get('time_synced'))"
+
   invariant:
     name: It only sends
     runs-on: ubuntu-latest
