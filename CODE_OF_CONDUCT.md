@@ -27,7 +27,7 @@ someone is representing the project in public.
 
 ## Enforcement
 
-Report anything that concerns you to **conduct@infranest.app**. Reports are handled confidentially, and we
+Report anything that concerns you to **support@infranest.io**. Reports are handled confidentially, and we
 will not act against a good-faith reporter.
 
 We may remove comments, commits, code and issues that do not follow this document, and may ban anyone whose
