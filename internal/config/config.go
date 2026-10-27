@@ -54,6 +54,12 @@ type Config struct {
 	// are public in the certificate itself, and dates. `INFRANEST_RENEWERS=0` turns it off.
 	Renewers bool
 
+	// Listening reports what this machine listens on and how many distinct peers are connected to each
+	// TCP port, by class (InfraNest #4019). Defaults to **on**: it reads the world-readable /proc/net
+	// tables and sends this machine's own bound addresses and ports — never a peer's address, never a
+	// program name. `INFRANEST_LISTENING=0` turns it off.
+	Listening bool
+
 	// StateDir holds the spool and the last-run record. Everything in it is disposable: losing it costs
 	// undelivered readings and nothing else.
 	StateDir string
@@ -78,6 +84,7 @@ func Load(getenv func(string) string) (Config, error) {
 		// Default-on, so absence means yes and only an explicit falsey value turns it off.
 		Services:    !falsey(getenv("INFRANEST_SERVICES")),
 		Renewers:    !falsey(getenv("INFRANEST_RENEWERS")),
+		Listening:   !falsey(getenv("INFRANEST_LISTENING")),
 		ProcessArgs: truthy(getenv("INFRANEST_PROCESS_ARGS")),
 	}
 

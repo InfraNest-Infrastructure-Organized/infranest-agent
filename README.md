@@ -59,6 +59,7 @@ is the first thing documented rather than a debugging flag buried at the bottom.
 | **Processes** | the largest few by memory, off by default, each with its CPU share and when it started. Ranked by memory rather than CPU because ranking by CPU would need two readings of *every* process; the share is measured for the reported few only, which is ten extra file reads rather than a second walk of all of `/proc`. **Arguments are omitted** — command lines routinely carry credentials, so the executable name is what gets sent unless you ask otherwise |
 | **Services** | systemd units that were set up to run, which of them have failed, **why each failed**, **how many times each has been restarted**, and what each is using in memory. Watched set is "enabled, plus anything currently failed", so it works with no configuration. Read over D-Bus; nothing here can start, stop or restart a unit. The failure reason is systemd's own word for it — `oom-kill`, `timeout`, `exit-code` and the rest — and **no log output is sent**: see [what it cannot see](#what-it-cannot-see) |
 | **Certificate renewers** | what renews this machine's certificates, and whether its last run worked: certbot's renewal configs (which certificates, which authenticator) and its systemd timer (when it last ran, how it finished, when it runs next); Caddy's and Traefik's certificate stores where they can be read. Only world-readable files — certbot's configs are; **private keys are never opened**, and Caddy's and Traefik's stores are owner-only on a stock install, so for those the agent reports that the store is there and refused it rather than reading it. `INFRANEST_RENEWERS=0` turns it off |
+| **Listening ports** | every TCP port in `LISTEN` and every bound, unconnected UDP port, read from `/proc/net/tcp`, `tcp6`, `udp` and `udp6` — which are world-readable — with the address each is bound to and whether that is every address, a specific one, or loopback only. For each TCP port, **how many distinct machines are connected, by class** (loopback, private, public). **Counts only: the addresses of whoever connects are never sent** — they are your own clients, and nothing here needs them. **No program names** either: linking a socket to its process means reading `/proc/<pid>/fd`, which an unprivileged agent can do only for itself, so the agent reports that a port listens and never guesses by whom. Lets InfraNest compare a firewall's open ports with what actually listens behind them. `INFRANEST_LISTENING=0` turns it off; not collected on Windows |
 | **Containers** | Docker and Podman containers that are running, how much memory each is using, and **how often each has restarted**: a container in a restart loop is `Up` every time anyone looks. Read from the scope units systemd keeps for each container, over the same D-Bus connection as the services above — **never from the Docker socket**, which is root on the host. The cost is that containers are known by their short ID, not their name. Hosts on Docker's older `cgroupfs` driver have no such units and report none |
 
 A failed unit is worth its own line here because it is the failure that moves no number: a backup timer
@@ -370,6 +371,16 @@ database. The failure reason answers the question that log line was going to be 
 can act on and a person can read in any language, and it cannot leak anything, because it is one word from
 a list systemd chose from.
 
+A third: **it cannot say which program owns a listening port.** The kernel's socket tables say that
+something listens on 5432 and on which address; which process holds that socket is recorded only under
+`/proc/<pid>/fd`, and the kernel shows a process's file descriptors to its own user and to root. A name
+for the agent's own sockets and silence for everyone else's would read as a complete list when it is not,
+so no name is reported at all — InfraNest shows the port as listening, and at most a guess from the
+well-known port number, labelled as one. The same tables are why it sees only the host's own network
+namespace: a container with its own namespace has its own tables, so a port Docker publishes shows up only
+when something on the host listens for it (`docker-proxy` does; Docker with the userland proxy turned off
+does not).
+
 ```
 User=infranest-agent
 NoNewPrivileges=yes
@@ -438,6 +449,7 @@ All optional except the token, and all set for you by the installer.
 | `INFRANEST_PROCESS_ARGS` | include full command lines. Off by default, and for good reason — see below |
 | `INFRANEST_SERVICES` | watch systemd units and report the ones that have failed. **On** by default — see below |
 | `INFRANEST_RENEWERS` | report what renews certificates here (certbot, Caddy, Traefik) and its last run. **On** by default |
+| `INFRANEST_LISTENING` | report listening ports and how many distinct peers are connected to each, by class — never their addresses. **On** by default |
 
 `INFRANEST_URL` must be `https`. The token is a bearer credential and this is the wire it crosses; there
 is no configuration for which plaintext is the right trade, so the agent refuses to start rather than

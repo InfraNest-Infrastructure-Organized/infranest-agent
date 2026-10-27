@@ -64,6 +64,11 @@ type Sample struct {
 	// receiver as `[]`, so a renewer that has gone is cleared there.
 	Renewers *[]Renewer `json:"renewers,omitempty"`
 
+	// What this machine accepts connections on, and how many distinct peers are connected to each TCP
+	// port, by class (InfraNest #4019). A snapshot like `services`. Nil when the collector is off, could
+	// not read /proc/net/tcp, or the platform has none (Windows); `ports: []` is "nothing listens".
+	Listening *Listening `json:"listening,omitempty"`
+
 	AgentVersion string `json:"agent_version,omitempty"`
 
 	// Collectors that failed, by name, with the reason. Reported rather than hidden: a collector that

@@ -6,7 +6,7 @@ This is a **public contract**. The agent is one implementation of it; anyone may
 endpoint does not care which is talking to it. So this document is the specification rather than a
 description of our code, and where the two disagree the endpoint's validation is the authority.
 
-**Contract version 16** — current as of agent `v0.14.0`.
+**Contract version 17** — current as of the first agent release after `v0.15.0`.
 
 Every change so far has been *additive*, and that is the rule rather than a run of luck: a field is added,
 never repurposed, and never made required after the fact. A sender written against version 1 keeps working
@@ -16,6 +16,7 @@ long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
+| 17 | `listening` and `collectors.listening` — every listening TCP port and bound UDP port, the address each is bound to, and for TCP how many distinct peers are connected by class (loopback, private, public). **Counts only — never a peer's address, never a program name** |
 | 16 | `renewers[].installer` and `renewers[].hooks` — whether anything tells the web server about a certbot renewal: the installer plugin, or a deploy or post hook |
 | 15 | `pressure_cpu`, `pressure_memory`, `pressure_memory_full`, `pressure_io`, `pressure_io_full` — how long work waited on each resource, from Linux pressure stall information |
 | 14 | `system.raid[]` — Linux software RAID arrays and whether any is running degraded |
@@ -130,6 +131,7 @@ nothing rather than a guess.
 | `renewers[].last_result` | string ≤32 | How the renewal service last finished, systemd's own word: `success`, or `exit-code`, `timeout`, `signal`… — one `certbot renew` run renews every lineage, so this is every certbot certificate's result |
 | `renewers[].next_run_at` | RFC3339 | When the timer fires next |
 | `renewers[].unreadable` | bool | The store exists and refused the agent — Traefik's `acme.json` is always owner-only, Caddy's storage usually is. `source` names it; `mode` and `root_owned` say why, as in `disk_usage.unreadable[]`. Not a failure of the collector: it is the true answer to "can an unprivileged agent read this" |
+| `listening` | object | What this machine accepts connections on — see [`listening`](#listening) below. A snapshot like `services`: on the newest sample only |
 | `system.kernel` / `system.os` | string ≤128 | |
 | `system.pending_updates` / `security_updates` | int | Absent means "could not tell", which is not zero |
 | `system.reboot_required` | bool | A reboot is needed to finish applying updates. False where nothing says so, which is not a check that nothing is pending |
@@ -163,7 +165,7 @@ nothing rather than a guess.
 | Field | Notes |
 |---|---|
 | `agent_version` | string ≤32. Shown in the UI, so a fleet running a version with a known bug is visible rather than something to be discovered |
-| `collectors` | object | Which optional collectors are on: `processes`, `process_args`, `services`, `renewers`, all booleans. **Sent on every push, and never omitted when false** — the false is the answer that matters. Without it an absent `processes` array means either "switched off" or "nothing to report yet", and a receiver that guesses tells somebody their agent is misconfigured when it was installed a minute ago |
+| `collectors` | object | Which optional collectors are on: `processes`, `process_args`, `services`, `renewers`, `listening`, all booleans. **Sent on every push, and never omitted when false** — the false is the answer that matters. Without it an absent `processes` array means either "switched off" or "nothing to report yet", and a receiver that guesses tells somebody their agent is misconfigured when it was installed a minute ago |
 | `failed` | `{"collector": "reason"}`, max 32, reasons ≤255. Collectors that could not read what they were asked for. Reported rather than hidden — silently sending fewer fields looks identical to a machine that has less to say |
 | `disk_usage` | One mount's directory breakdown. Rides on whichever push follows the walk — see below |
 
@@ -198,9 +200,82 @@ host the first several are `/etc/credstore`, `/etc/ssl/private`, `/etc/sudoers.d
 kilobytes between them — while `/var/lib/docker`, which is usually the answer, arrives long after a
 first-come list is full.
 
+## `listening`
+
+What this machine accepts connections on, read from the kernel's socket tables — `/proc/net/tcp`, `tcp6`,
+`udp` and `udp6`, which every user may read. It exists so a receiver can compare a firewall's open ports
+with what actually listens behind them: a rule open for nothing, or a database listening on every address.
+
+```json
+"listening": {
+  "ports": [
+    { "protocol": "tcp", "port": 22,    "bind": "all",      "addresses": ["0.0.0.0", "::"],
+      "peers": { "loopback": 0, "private": 4, "public": 2 } },
+    { "protocol": "udp", "port": 51820, "bind": "all",      "addresses": ["::"] },
+    { "protocol": "tcp", "port": 3306,  "bind": "specific", "addresses": ["10.0.0.10"],
+      "peers": { "loopback": 0, "private": 0, "public": 0 } },
+    { "protocol": "tcp", "port": 5432,  "bind": "loopback", "addresses": ["127.0.0.1", "::1"],
+      "peers": { "loopback": 1, "private": 0, "public": 0 } }
+  ],
+  "more": 0,
+  "partial": false
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `listening` | object | **Absent** where it was not read: the collector is off (`collectors.listening: false`), the platform has none (Windows — `collectors.listening` is `false` there too), `/proc/net/tcp` could not be read (then `failed.listening` says why), or the sender predates contract 17 (no `listening` key in `collectors` at all). **Present with `ports: []` means it read the tables and nothing listens** — a claim, and the receiver may act on it. Absent never means that |
+| `ports[]` | array, max 100 | **One entry per protocol and port**, however many sockets and addresses hold it — see below. Ranked before truncating: bound to every address first, then to a specific address, then loopback only; then TCP before UDP; then by port. So what the cap drops, if anything, is what nobody outside can reach |
+| `ports[].protocol` | string | `tcp` (a socket in `LISTEN`) or `udp` (a bound socket with no connected peer) |
+| `ports[].port` | int 1–65535 | |
+| `ports[].bind` | string | The **widest** of its addresses: `all` (`0.0.0.0` or `::`), `specific` (one of this machine's own addresses), or `loopback` (`127.0.0.0/8` or `::1`) |
+| `ports[].addresses` | array of string ≤45, max 8 | The local addresses it is bound to, wildcards first, then IPv4 before IPv6, then numerically. This machine's own addresses — never a peer's. A port bound to more than eight drops the rest; `bind` is computed over all of them |
+| `ports[].peers` | object | TCP only. **Distinct remote addresses** with an established connection to this port, counted by class: `loopback`, `private` (RFC 1918, RFC 4193 `fc00::/7`, CGNAT `100.64.0.0/10`, link-local `169.254.0.0/16` and `fe80::/10`) and `public` (everything else). Counts of addresses, not of connections: one client with twenty connections is one. A snapshot of this moment, not of the minute. Absent on UDP, which has no connections to count |
+| `more` | int ≥0 | Ports read but not sent because of the cap. **Always sent**, so a truncated list cannot pass for a complete one |
+| `partial` | bool | A socket table was longer than the agent reads (100,000 rows per table), or more than 65,536 distinct peers were connected. The kernel lists every listening TCP socket before any connection, so **the TCP ports are complete and the peer counts are lower bounds**; UDP has one list, and ports may be missing from it |
+
+**How duplicates are folded.** The kernel lists sockets, and one service is often several: nginx with
+`SO_REUSEPORT` holds one per worker, and `listen 80; listen [::]:80;` is one IPv4 and one IPv6 socket.
+Those become one entry per protocol and port, with every distinct local address in `addresses`. An
+IPv4-mapped address (`::ffff:a.b.c.d`) — how a dual-stack socket lists an IPv4 address — is reported as the
+IPv4 address, for binds and for peers, so one client reaching a port over both tables counts once. Ports
+are never folded across protocols: `tcp 53` and `udp 53` are two entries.
+
+**What `::` cannot tell you.** A socket bound to `::` accepts IPv6 on every address and, unless the program
+set `IPV6_V6ONLY`, IPv4 too. The socket tables do not record that option, so an entry whose addresses are
+only `["::"]` may or may not be reachable over IPv4. Treat it as exposed on both.
+
+**A UDP client looks like a server.** A program that sends from an unconnected UDP socket — rare, as most
+resolvers connect theirs — is listed exactly like one waiting for packets, on a port from the ephemeral
+range, for as long as the socket is open. It is reported rather than filtered: filtering the ephemeral
+range would also hide WireGuard's 51820 and mosh's 60000s, which are exactly the ports worth seeing.
+
+**One network namespace.** These are the sockets of the namespace the agent runs in — the host's, under
+the shipped unit. A container with its own namespace is not seen, so a port Docker publishes is listed only
+when something on the host listens for it (`docker-proxy`, the default); with Docker's userland proxy off,
+the port is forwarded by the firewall and **nothing listens on the host**. A receiver must not call such a
+port "open for nothing" on this evidence alone.
+
+### No peer addresses
+
+**A peer's address is never sent.** The machines connected to a server are its users and its customers'
+users: personal data, and none of it is needed to judge a firewall rule. The agent reads each remote
+address, classifies it in memory, and discards it; only the three counts leave the machine. A sender
+implementing this contract must do the same — the receiver has no field to store an address in, and must
+not grow one.
+
+### No program names
+
+**There is no field for which program owns a port, and a receiver must never show one it did not
+observe.** The socket tables name a socket by inode; finding its process means reading `/proc/<pid>/fd`,
+which the kernel allows only for the reader's own processes and root's own. An unprivileged agent would
+know the owner of its own sockets and of nobody else's — a list that is right where it does not matter and
+silent everywhere else. A receiver may show a guess from a well-known port ("5432 is usually PostgreSQL"),
+**labelled as a guess**, and never as something the agent saw.
+
 ## Snapshots belong on the newest sample only
 
-`services`, `processes`, `system` and `renewers` describe **now**, not the moment a reading was taken. The server
+`services`, `processes`, `system`, `renewers` and `listening` describe **now**, not the moment a reading was taken. The server
 applies them from the newest sample in the batch and ignores them on every other one — deliberately,
 because applying each in turn would leave the disk card showing whichever happened to be last in the
 payload: an hour-old state presented as current.
@@ -218,6 +293,10 @@ document publishes:
 **The endpoint accepts a request body of 8 MB.** The first shape does not fit and is rejected by the web
 server *before* any of this validation runs — which means no per-reading verdict, so the batch is never
 settled, so a store-and-forward sender keeps it and retries it for ever. The second fits with room.
+
+`listening` arrived after these figures were measured and adds at most **46,441 bytes** to the one sample
+that carries it (100 ports, each with eight IPv6 addresses and seven-digit peer counts) — still well inside
+the limit on the second shape, and one more reason the first cannot be sent.
 
 `mounts` is **not** a snapshot and must stay on every sample. It looks like one, but `worst_mount_percent`
 is derived per reading and is what a disk rule averages over its window — a backfilled sample without

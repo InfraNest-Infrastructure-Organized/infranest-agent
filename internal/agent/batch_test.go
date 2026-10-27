@@ -144,3 +144,17 @@ func TestSamplesWithNoTimestampFallBackToPosition(t *testing.T) {
 		t.Fatalf("with no timestamps the last sample should be kept: %s", out[1])
 	}
 }
+
+// The listening sockets (InfraNest #4019) describe now, like services: one copy on the newest sample.
+func TestListeningRidesOnTheNewestSampleOnly(t *testing.T) {
+	in := []json.RawMessage{
+		sample(t, `{"collected_at":"2026-08-26T10:00:00Z","cpu_percent":1,"listening":{"ports":[],"more":0,"partial":false}}`),
+		sample(t, `{"collected_at":"2026-08-26T10:01:00Z","cpu_percent":2,"listening":{"ports":[],"more":0,"partial":false}}`),
+	}
+
+	out := trimSnapshots(in)
+
+	if strings.Contains(string(out[0]), `"listening"`) || !strings.Contains(string(out[1]), `"listening"`) {
+		t.Fatalf("got %s / %s", out[0], out[1])
+	}
+}

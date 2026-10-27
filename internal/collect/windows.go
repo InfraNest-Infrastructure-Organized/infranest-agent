@@ -57,6 +57,9 @@ type Options struct {
 	Renewers bool
 	// Accepted and ignored: the byte counters are read from Linux's /proc.
 	Traffic *TrafficTracker
+	// Accepted and ignored: listening sockets are read from Linux's /proc/net, and the field is absent on
+	// Windows rather than approximated (InfraNest #4019).
+	Listening bool
 }
 
 // Collect takes one reading on Windows.

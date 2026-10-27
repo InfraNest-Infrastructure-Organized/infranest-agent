@@ -190,6 +190,7 @@ func (r *Runner) collectOnce(seq int64, state *State) {
 		Containers:   r.containerTracker(),
 		Renewers:     r.Config.Renewers,
 		Traffic:      r.trafficTracker(),
+		Listening:    r.Config.Listening,
 	})
 	if err != nil {
 		r.logf("collection failed: %v", err)
@@ -318,6 +319,9 @@ func (r *Runner) sendOnce(ctx context.Context, url *string, state *State) error 
 		// Only where there is a systemd to ask (#3836): on OpenRC or runit it is not switched on, it is absent.
 		Services: r.Config.Services && collect.ServicesAvailable(),
 		Renewers: r.Config.Renewers,
+		// False where the platform has no such collector (Windows), so it never reads as "on, and
+		// nothing listens".
+		Listening: r.Config.Listening && collect.ListeningAvailable(),
 	})
 
 	if !result.ServerTime.IsZero() {
