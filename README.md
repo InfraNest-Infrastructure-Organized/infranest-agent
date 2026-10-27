@@ -139,6 +139,27 @@ Get-FileHash install.ps1 -Algorithm SHA256   # compare with the checksum InfraNe
 .\install.ps1 -Token sat_YOUR_TOKEN
 ```
 
+### Many servers: an enrollment key
+
+A token belongs to one server, so a fleet would need one per machine. An **enrollment key** (InfraNest →
+Settings → Server agent) works on all of them: put one line in a cloud-init file, an Ansible role or an
+image, and each server trades the key for a token of its own when the installer runs.
+
+```sh
+curl -fsSL https://get.infranest.io/agent.sh | sudo sh -s -- --enroll sek_YOUR_KEY
+```
+
+```powershell
+.\install.ps1 -Enroll sek_YOUR_KEY
+```
+
+The exchange happens before anything is installed, so a revoked or expired key, or one that has enrolled
+as many servers as it allows, stops with the reason and leaves nothing behind. The installer sends the
+hostname and the machine id (`/etc/machine-id`, or `MachineGuid` on Windows); InfraNest keeps only a digest
+of the two, which is how running the installer again on the same machine finds the same server instead of
+adding a second one. The agent itself never sees the key: what it runs with is the server's own token, in
+`agent.conf`, exactly as with `--token`.
+
 ### Verifying a release before you install it
 
 The installer already refuses to install a binary whose checksum does not match. If `gh` or `cosign` is
