@@ -38,6 +38,10 @@ type Options struct {
 	CPUInterval time.Duration
 	// Traffic turns the byte counters into rates between samples (#3831). Skipped when nil.
 	Traffic *TrafficTracker
+	// Listening reports listening sockets and counts of connected peers by class (InfraNest #4019), from
+	// /proc/net. On by default — no remote address and no program name is sent — and
+	// `INFRANEST_LISTENING=0` turns it off.
+	Listening bool
 }
 
 // Collect takes one reading.
@@ -126,6 +130,14 @@ func Collect(opts Options) (Sample, error) {
 	if opts.Renewers {
 		renewers := CollectRenewers()
 		s.Renewers = &renewers
+	}
+
+	if opts.Listening {
+		if listening, err := CollectListening(); err != nil {
+			s.fail("listening", err)
+		} else {
+			s.Listening = listening
+		}
 	}
 
 	return s, nil

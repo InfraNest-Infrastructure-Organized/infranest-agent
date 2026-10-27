@@ -19,6 +19,7 @@ type Options struct {
 	Containers   *ContainerTracker
 	Renewers     bool
 	Traffic      *TrafficTracker
+	Listening    bool
 }
 
 // Collect reports honestly that this platform is not implemented rather than returning zeros.

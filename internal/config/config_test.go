@@ -248,3 +248,16 @@ func TestAMissingConfigStillBlamesTheToken(t *testing.T) {
 		t.Fatalf("expected the missing-token message, got %v", err)
 	}
 }
+
+// The listening collector (InfraNest #4019) is on unless switched off, like services and renewers.
+func TestListeningIsOnUnlessTurnedOff(t *testing.T) {
+	c, err := Load(env(map[string]string{"INFRANEST_TOKEN": "sat_x"}))
+	if err != nil || !c.Listening {
+		t.Fatalf("expected listening on by default, got %v %v", c.Listening, err)
+	}
+
+	c, err = Load(env(map[string]string{"INFRANEST_TOKEN": "sat_x", "INFRANEST_LISTENING": "0"}))
+	if err != nil || c.Listening {
+		t.Fatalf("expected INFRANEST_LISTENING=0 to turn it off, got %v %v", c.Listening, err)
+	}
+}
