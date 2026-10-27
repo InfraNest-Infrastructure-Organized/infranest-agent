@@ -6,7 +6,7 @@ This is a **public contract**. The agent is one implementation of it; anyone may
 endpoint does not care which is talking to it. So this document is the specification rather than a
 description of our code, and where the two disagree the endpoint's validation is the authority.
 
-**Contract version 17** — current as of the first agent release after `v0.15.0`.
+**Contract version 18** — current as of the first agent release after `v0.15.0`.
 
 Every change so far has been *additive*, and that is the rule rather than a run of luck: a field is added,
 never repurposed, and never made required after the fact. A sender written against version 1 keeps working
@@ -16,6 +16,7 @@ long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
+| 18 | `processes[].unit` / `container_id` — the systemd service or container each reported process belongs to (InfraNest #4917); `services[].last_trigger_at` / `next_elapse_at` — when a timer last fired and fires next (#4945) |
 | 17 | `listening` and `collectors.listening` — every listening TCP port and bound UDP port, the address each is bound to, and for TCP how many distinct peers are connected by class (loopback, private, public). **Counts only — never a peer's address, never a program name** |
 | 16 | `renewers[].installer` and `renewers[].hooks` — whether anything tells the web server about a certbot renewal: the installer plugin, or a deploy or post hook |
 | 15 | `pressure_cpu`, `pressure_memory`, `pressure_memory_full`, `pressure_io`, `pressure_io_full` — how long work waited on each resource, from Linux pressure stall information |
@@ -98,6 +99,8 @@ nothing rather than a guess.
 | `processes[].cpu_percent` | 0–100 | Share of one core over the sampling interval, measured for the reported few only. **Clamped at 100**: a threaded process genuinely exceeds one core, and the endpoint validates this field as a percentage — a push carrying 340 fails validation for the whole batch |
 | `processes[].pid` | int ≥0 | |
 | `processes[].started_at` | RFC3339 | When the process started, from the machine's boot time plus its start offset. Absent rather than wrong where boot time could not be read: a date computed from a boot time we do not have is believed in a way an absent field is not |
+| `processes[].unit` | string ≤255 | The systemd service the process runs under (`php8.3-fpm.service`), from its world-readable `/proc/<pid>/cgroup`. Read for the reported processes only. Absent when the cgroup names no service — a login session, a kernel thread, or anything inside a container |
+| `processes[].container_id` | string ≤64 | The short ID of the container the process runs in, from the same cgroup (`docker-<id>.scope`, `libpod-<id>.scope`, or `/docker/<id>` on the `cgroupfs` driver). Set instead of `unit`, never with it |
 | `services[]` | array | Max 200 |
 | `services[].unit` | string ≤255 | |
 | `services[].description` | string ≤255 | |
@@ -109,6 +112,8 @@ nothing rather than a guess.
 | `services[].result` | string ≤32 | Why the unit last finished the way it did, from a fixed vocabulary the service manager chooses from: `exit-code`, `signal`, `core-dump`, `timeout`, `watchdog`, `start-limit-hit`, `oom-kill`, `resources`, `protocol`. Sent **only for failed units**, and only when it is not `success` — a healthy unit would carry it on every row to say nothing happened. This is the answer to "why did it fail" that carries no log output: see [Why there is no log excerpt](#why-there-is-no-log-excerpt) |
 | `services[].exec_main_code` | int | How the main process ended, as a POSIX `si_code`: 1 exited, 2 killed, 3 dumped. **Send it with `exec_main_status` or not at all** |
 | `services[].exec_main_status` | int | The exit status, or the signal number when the code says killed. Meaningless alone: `0` is a clean exit beside code 1 and is not a status at all beside code 2. Both are absent together where the service manager has no record of a main process ending — which is a unit that failed before it ever started, and is a different fact from exiting with zero |
+| `services[].last_trigger_at` | RFC3339 | For a `.timer` unit only: when it last fired. Absent for a timer that has never fired, and for every other unit |
+| `services[].next_elapse_at` | RFC3339 | For a `.timer` unit only: when it fires next, on the wall clock. Absent when it is not scheduled |
 | `containers` | array, max 100 | Running containers, from systemd's `docker-<id>.scope` / `libpod-<id>.scope` units — **never the Docker socket**, which is root on the host. A snapshot like `services`: on the newest sample only. Absent when the agent could not ask systemd; `[]` means none that systemd can see, which includes every host on Docker's `cgroupfs` driver |
 | `containers[].id` | string ≤64 | The short container ID (twelve hex digits). Names live in the runtime's own state, which only root can read; `docker ps --filter id=<id>` gives the name |
 | `containers[].runtime` | string ≤32 | `docker` or `podman` |

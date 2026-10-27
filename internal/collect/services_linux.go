@@ -108,6 +108,18 @@ func CollectUnits(tracker *ContainerTracker) ([]Service, []Container, error) {
 				service.StateChangedAt = &at
 			}
 
+			// When a timer last fired and fires next (InfraNest #4945) — what puts a nightly job on the server's
+			// 24-hour axis, so the CPU climb right after it is explained by it. Two reads per timer, and a
+			// machine has a dozen or so; the same properties certbot's renewer already reads.
+			if strings.HasSuffix(unit.Name, ".timer") {
+				if at, err := conn.TimerLastTrigger(unit.Path); err == nil && !at.IsZero() {
+					service.LastTriggerAt = &at
+				}
+				if at, err := conn.TimerNextElapse(unit.Path); err == nil && !at.IsZero() {
+					service.NextElapseAt = &at
+				}
+			}
+
 			// `.service` only. A timer, target or mount has neither property, and asking answers with an
 			// unknown-property error — so this filters rather than treating a normal answer as a fault.
 			if strings.HasSuffix(unit.Name, ".service") {
