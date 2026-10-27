@@ -23,9 +23,12 @@ import (
 //
 // Two things are deliberately not here:
 //
-//   - **No remote addresses.** The peers of a connection are this customer's own clients, which is
-//     personal data the receiver has no use for. Only counts by class leave the machine; the addresses are
-//     classified in memory and dropped.
+//   - **No remote addresses it was not given.** The peers of a connection are this customer's own clients,
+//     which is personal data the receiver has no use for. Only counts by class leave the machine; the
+//     addresses are classified in memory and dropped. The one exception is `known_peers` (InfraNest #4903):
+//     connections to and from the addresses InfraNest itself sent in the push response, which are the same
+//     organization's other servers. Those addresses came from the receiver, so reporting them back tells it
+//     nothing about anyone else.
 //   - **No program names.** Tying a socket to its process means reading /proc/<pid>/fd, which an
 //     unprivileged agent can do only for its own processes. A name reported for some ports and not others
 //     would read as complete when it is not, so none is reported, and the receiver must never show one it
@@ -41,6 +44,21 @@ type Listening struct {
 	// sockets before connected ones, so the ports are complete and the peer counts are lower bounds; for
 	// UDP, which has one list, ports may be missing too.
 	Partial bool `json:"partial"`
+	// Established TCP connections to and from the addresses InfraNest named (InfraNest #4903), by address,
+	// port and direction. Absent when the agent holds no list — an older receiver, or the first reading after
+	// a restart — and `[]` when it has one and nothing on it is connected: the two mean different things.
+	KnownPeers *[]KnownPeer `json:"known_peers,omitempty"`
+}
+
+// KnownPeer is one of this organization's servers that this machine is connected to.
+type KnownPeer struct {
+	Address string `json:"address"`
+	// The port that identifies the service: ours for "in" (the peer connects to a port we listen on), theirs
+	// for "out" (we connect to a port the peer listens on). The other side's ephemeral port says nothing.
+	Port      int    `json:"port"`
+	Direction string `json:"direction"` // "in" or "out"
+	// Established connections right now. A pool of twenty to one database is twenty.
+	Connections int `json:"connections"`
 }
 
 // ListeningPort is one protocol and port, with every local address it is bound to.
@@ -80,6 +98,11 @@ const (
 	maxSocketRows = 100_000
 	// Distinct (port, peer) pairs held while counting. Bounds memory under the unit's 64M ceiling.
 	maxPeerPairs = 65_536
+	// Known-peer edges sent. A server talking to more of its own fleet than this on distinct ports is
+	// unusual; the list is ranked by connections first, so the cap drops the least used.
+	maxKnownPeers = 200
+	// Addresses accepted from the receiver. Bounds the set held between samples.
+	MaxKnownPeerAddresses = 4096
 )
 
 // Kernel socket states, as /proc/net/{tcp,udp}* print them (include/net/tcp_states.h).
@@ -111,17 +134,48 @@ type peerKey struct {
 
 // listenAccumulator gathers listeners and TCP peers across the four tables, then turns them into the
 // payload. It never holds more than maxPeerPairs peer entries.
+type edgeKey struct {
+	addr netip.Addr
+	port uint16
+	dir  string
+}
+
 type listenAccumulator struct {
 	ports   map[portKey]map[netip.Addr]struct{}
 	peers   map[peerKey]struct{}
 	partial bool
+	// nil when the agent holds no list from the receiver; edges is then never filled or sent.
+	known map[netip.Addr]struct{}
+	edges map[edgeKey]int
 }
 
-func newListenAccumulator() *listenAccumulator {
+func newListenAccumulator(known map[netip.Addr]struct{}) *listenAccumulator {
 	return &listenAccumulator{
 		ports: map[portKey]map[netip.Addr]struct{}{},
 		peers: map[peerKey]struct{}{},
+		known: known,
+		edges: map[edgeKey]int{},
 	}
+}
+
+// edge counts one established connection with a known peer. Incoming when the local port is one we
+// listen on; outgoing otherwise, keyed by the peer's port. Bounded like the peer pairs.
+func (a *listenAccumulator) edge(row socketRow) {
+	if a.known == nil {
+		return
+	}
+	if _, ok := a.known[row.remote]; !ok {
+		return
+	}
+	k := edgeKey{addr: row.remote, port: row.remotePort, dir: "out"}
+	if _, listening := a.ports[portKey{"tcp", row.localPort}]; listening {
+		k = edgeKey{addr: row.remote, port: row.localPort, dir: "in"}
+	}
+	if _, ok := a.edges[k]; !ok && len(a.edges) >= maxPeerPairs {
+		a.partial = true
+		return
+	}
+	a.edges[k]++
 }
 
 func (a *listenAccumulator) listen(proto string, addr netip.Addr, port uint16) {
@@ -276,6 +330,7 @@ func scanSocketTable(r io.Reader, proto string, order binary.ByteOrder, acc *lis
 			if _, ok := acc.ports[portKey{"tcp", row.localPort}]; ok {
 				acc.peer(row.localPort, row.remote)
 			}
+			acc.edge(row)
 		case proto == "udp" && row.state == stateClose && row.remote.IsUnspecified() && row.remotePort == 0:
 			if row.localPort != 0 {
 				acc.listen(proto, row.local, row.localPort)
@@ -295,8 +350,8 @@ func scanSocketTable(r io.Reader, proto string, order binary.ByteOrder, acc *lis
 // row that is not a listener, which on every kernel is where the listeners end, so it costs a few dozen
 // lines. Nothing depends on that ordering for correctness: the full pass records listeners too, and on a
 // kernel that interleaved them only the peers seen before their listener would be missed.
-func collectListening(open func(name string) (io.ReadCloser, error), order binary.ByteOrder) (*Listening, error) {
-	acc := newListenAccumulator()
+func collectListening(open func(name string) (io.ReadCloser, error), order binary.ByteOrder, known map[netip.Addr]struct{}) (*Listening, error) {
+	acc := newListenAccumulator(known)
 
 	read := func(name, proto string, required, listenersOnly bool) error {
 		f, err := open(name)
@@ -397,7 +452,49 @@ func (a *listenAccumulator) result() *Listening {
 		out.More = len(ports) - maxListeningPorts
 	}
 
+	if a.known != nil {
+		peers := make([]KnownPeer, 0, len(a.edges))
+		for k, n := range a.edges {
+			peers = append(peers, KnownPeer{Address: k.addr.String(), Port: int(k.port), Direction: k.dir, Connections: n})
+		}
+		// Most connections first, then a stable order, so the cap drops the least used and the receiver sees
+		// no change that is not one.
+		slices.SortFunc(peers, func(x, y KnownPeer) int {
+			if c := cmp.Compare(y.Connections, x.Connections); c != 0 {
+				return c
+			}
+			if c := cmp.Compare(x.Address, y.Address); c != 0 {
+				return c
+			}
+			if c := cmp.Compare(x.Direction, y.Direction); c != 0 {
+				return c
+			}
+			return cmp.Compare(x.Port, y.Port)
+		})
+		if len(peers) > maxKnownPeers {
+			peers = peers[:maxKnownPeers]
+		}
+		out.KnownPeers = &peers
+	}
+
 	return out
+}
+
+// KnownPeerSet turns the addresses the receiver sent into the set the collector matches against. Anything
+// that does not parse is skipped; the set is capped. IPv4-mapped addresses are unmapped, as the socket
+// tables' are, so one server is one address however it is written.
+func KnownPeerSet(addresses []string) map[netip.Addr]struct{} {
+	set := make(map[netip.Addr]struct{}, min(len(addresses), MaxKnownPeerAddresses))
+	for _, s := range addresses {
+		if len(set) >= MaxKnownPeerAddresses {
+			break
+		}
+		if a, err := netip.ParseAddr(strings.TrimSpace(s)); err == nil && !a.IsUnspecified() && !a.IsLoopback() {
+			set[a.Unmap()] = struct{}{}
+		}
+	}
+
+	return set
 }
 
 // rankListening orders the exposed before the private: bound to every address, then to a specific one,

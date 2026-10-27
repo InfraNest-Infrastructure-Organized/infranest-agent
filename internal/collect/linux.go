@@ -5,6 +5,7 @@ package collect
 import (
 	"fmt"
 	"math"
+	"net/netip"
 	"os"
 	"reflect"
 	"strings"
@@ -42,6 +43,9 @@ type Options struct {
 	// /proc/net. On by default — no remote address and no program name is sent — and
 	// `INFRANEST_LISTENING=0` turns it off.
 	Listening bool
+	// KnownPeers is the organization's other servers' addresses from the receiver (InfraNest #4903), nil when
+	// the agent holds none. Connections to these alone are reported by address.
+	KnownPeers map[netip.Addr]struct{}
 }
 
 // Collect takes one reading.
@@ -133,7 +137,7 @@ func Collect(opts Options) (Sample, error) {
 	}
 
 	if opts.Listening {
-		if listening, err := CollectListening(); err != nil {
+		if listening, err := CollectListening(opts.KnownPeers); err != nil {
 			s.fail("listening", err)
 		} else {
 			s.Listening = listening

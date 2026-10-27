@@ -6,7 +6,7 @@ This is a **public contract**. The agent is one implementation of it; anyone may
 endpoint does not care which is talking to it. So this document is the specification rather than a
 description of our code, and where the two disagree the endpoint's validation is the authority.
 
-**Contract version 18** — current as of the first agent release after `v0.15.0`.
+**Contract version 19** — current as of the first agent release after `v0.15.0`.
 
 Every change so far has been *additive*, and that is the rule rather than a run of luck: a field is added,
 never repurposed, and never made required after the fact. A sender written against version 1 keeps working
@@ -16,6 +16,7 @@ long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
+| 19 | `listening.known_peers` — established connections to and from the addresses the receiver sent back as `peer_addresses`, the same organization's other servers, by address, port and direction (InfraNest #4903). Never any other address |
 | 18 | `processes[].unit` / `container_id` — the systemd service or container each reported process belongs to (InfraNest #4917); `services[].last_trigger_at` / `next_elapse_at` — when a timer last fired and fires next (#4945) |
 | 17 | `listening` and `collectors.listening` — every listening TCP port and bound UDP port, the address each is bound to, and for TCP how many distinct peers are connected by class (loopback, private, public). **Counts only — never a peer's address, never a program name** |
 | 16 | `renewers[].installer` and `renewers[].hooks` — whether anything tells the web server about a certbot renewal: the installer plugin, or a deploy or post hook |
@@ -237,6 +238,11 @@ with what actually listens behind them: a rule open for nothing, or a database l
 | `ports[].addresses` | array of string ≤45, max 8 | The local addresses it is bound to, wildcards first, then IPv4 before IPv6, then numerically. This machine's own addresses — never a peer's. A port bound to more than eight drops the rest; `bind` is computed over all of them |
 | `ports[].peers` | object | TCP only. **Distinct remote addresses** with an established connection to this port, counted by class: `loopback`, `private` (RFC 1918, RFC 4193 `fc00::/7`, CGNAT `100.64.0.0/10`, link-local `169.254.0.0/16` and `fe80::/10`) and `public` (everything else). Counts of addresses, not of connections: one client with twenty connections is one. A snapshot of this moment, not of the minute. Absent on UDP, which has no connections to count |
 | `more` | int ≥0 | Ports read but not sent because of the cap. **Always sent**, so a truncated list cannot pass for a complete one |
+| `known_peers` | array, max 200 | Established TCP connections to and from the addresses the **receiver** named in its last `peer_addresses` (see [What comes back](#what-comes-back)) — the organization's other servers — and to no other address. **Absent** when the agent holds no list: a receiver that sends none, or the first reading after the agent starts. `[]` when it holds a list and none of them is connected. Most connections first |
+| `known_peers[].address` | string ≤45 | One of the addresses the receiver sent, IPv4-mapped addresses unmapped |
+| `known_peers[].port` | int | The port that names the service: this machine's own listening port for `in`, the peer's port for `out`. The other side's ephemeral port is not sent |
+| `known_peers[].direction` | string | `in` — the peer connects to a port this machine listens on; `out` — this machine connects to the peer |
+| `known_peers[].connections` | int ≥1 | Established connections right now. A pool of twenty to one database is twenty |
 | `partial` | bool | A socket table was longer than the agent reads (100,000 rows per table), or more than 65,536 distinct peers were connected. The kernel lists every listening TCP socket before any connection, so **the TCP ports are complete and the peer counts are lower bounds**; UDP has one list, and ports may be missing from it |
 
 **How duplicates are folded.** The kernel lists sockets, and one service is often several: nginx with
@@ -263,11 +269,15 @@ port "open for nothing" on this evidence alone.
 
 ### No peer addresses
 
-**A peer's address is never sent.** The machines connected to a server are its users and its customers'
+**A peer's address is never sent, unless the receiver named it.** The machines connected to a server are its users and its customers'
 users: personal data, and none of it is needed to judge a firewall rule. The agent reads each remote
 address, classifies it in memory, and discards it; only the three counts leave the machine. A sender
-implementing this contract must do the same — the receiver has no field to store an address in, and must
-not grow one.
+implementing this contract must do the same.
+
+The one exception is `known_peers` (contract 19). It reports only addresses the receiver itself sent as
+`peer_addresses`: the same organization's other servers, which the receiver already holds. Matching against
+that list in memory tells the receiver which of its own servers talk to each other, and nothing about
+anyone else. A connection to any address not on the list is counted by class as before and never named.
 
 ### No program names
 
@@ -355,7 +365,8 @@ Deliberately asymmetric, because the future and the past are different problems.
   "skipped": [ { "index": 0, "reason": "already_covered", "collected_at": "…" } ],
   "server_time": "2026-08-26T08:19:51Z",
   "ingest_url": "https://ingest.infranest.io",
-  "min_interval_seconds": 60
+  "min_interval_seconds": 60,
+  "peer_addresses": ["10.0.0.5", "203.0.113.20"]
 }
 ```
 
@@ -385,6 +396,11 @@ is no floor. Honouring it saves the request rather than only the write, which is
 adopt it **only downward**: a response saying "I keep one every five minutes" is a reason to send less
 often, never a reason to send more. A response able to lower a sender's interval could make every agent
 busier, which is the same shape as the redirect guard below.
+
+`peer_addresses` are the addresses of the organization's **other** servers, public and private, at most
+4,096 (contract 19). The sender keeps the latest list in memory and reports connections to them, and only
+them, in `listening.known_peers`. Absent from a receiver that does not ask for it; the sender then sends no
+`known_peers`. An empty list means the organization has no other servers.
 
 `ingest_url` names where readings should go from now on. **A client should adopt it only over HTTPS and
 only within the same registrable domain as where it is already sending** — that allows a fleet to be moved

@@ -61,6 +61,9 @@ type Result struct {
 	// server already holds and offering them again for ever — the head of the spool never clears and
 	// nothing behind it is ever sent.
 	Settled bool
+	// PeerAddresses are the organization's other servers' addresses (InfraNest #4903), nil when the receiver
+	// sent none. The listening collector reports connections to these, and to nothing else, by address.
+	PeerAddresses *[]string
 }
 
 // Skipped is one reading the server would not store, and why. Surfaced rather than swallowed: "your
@@ -159,6 +162,9 @@ func (c *Client) Send(ctx context.Context, url string, samples []json.RawMessage
 		IngestURL   string    `json:"ingest_url"`
 		MinInterval int       `json:"min_interval_seconds"`
 		Reason      string    `json:"reason"`
+		// The organization's other servers (InfraNest #4903). A pointer, so an older receiver that sends
+		// nothing is told apart from one that sends an empty list.
+		PeerAddresses *[]string `json:"peer_addresses"`
 	}
 	// A body we cannot parse is not fatal on its own — the status code is the real answer, and a proxy
 	// serving an HTML error page should not look different from the 502 it is.
@@ -175,7 +181,8 @@ func (c *Client) Send(ctx context.Context, url string, samples []json.RawMessage
 		// A verdict on the readings themselves, as opposed to a refusal of the request. Every reason the
 		// server can give — already stored, too old, ahead of its clock — is terminal: none of them comes
 		// good by being sent again, and holding one blocks everything behind it.
-		Settled: decoded.Accepted > 0 || len(decoded.Skipped) > 0,
+		Settled:       decoded.Accepted > 0 || len(decoded.Skipped) > 0,
+		PeerAddresses: decoded.PeerAddresses,
 	}
 
 	switch {

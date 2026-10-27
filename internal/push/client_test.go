@@ -252,3 +252,34 @@ func TestThePayloadSaysWhichCollectorsAreOn(t *testing.T) {
 		t.Fatal("process_args is missing; every flag is sent or none of them can be trusted")
 	}
 }
+
+// The organization's other servers ride on the response (InfraNest #4903). An older receiver sends no
+// field, which must stay distinguishable from "no other servers".
+func TestPeerAddressesAreReadAndAbsenceIsKept(t *testing.T) {
+	got, err := send(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"accepted":1,"peer_addresses":["10.0.0.5","203.0.113.7"]}`))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PeerAddresses == nil || len(*got.PeerAddresses) != 2 {
+		t.Fatalf("expected two addresses, got %v", got.PeerAddresses)
+	}
+
+	older, _ := send(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"accepted":1}`))
+	})
+	if older.PeerAddresses != nil {
+		t.Fatal("a response without the field must leave the list nil, not empty")
+	}
+
+	none, _ := send(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"accepted":1,"peer_addresses":[]}`))
+	})
+	if none.PeerAddresses == nil || len(*none.PeerAddresses) != 0 {
+		t.Fatal("an empty list must come back as an empty list")
+	}
+}
