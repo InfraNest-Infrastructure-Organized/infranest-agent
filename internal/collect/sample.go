@@ -148,6 +148,11 @@ type Service struct {
 	// exiting with zero, and would otherwise read as success.
 	ExecMainCode   *int32 `json:"exec_main_code,omitempty"`
 	ExecMainStatus *int32 `json:"exec_main_status,omitempty"`
+
+	// For a `.timer` unit, when it last fired and when it fires next (InfraNest #4945). Absent for every
+	// other unit, and for a timer that has never fired or is not scheduled.
+	LastTriggerAt *time.Time `json:"last_trigger_at,omitempty"`
+	NextElapseAt  *time.Time `json:"next_elapse_at,omitempty"`
 }
 
 // Process is one of the busiest few. Command carries no arguments unless the operator turned them on:
@@ -158,6 +163,12 @@ type Process struct {
 	MemoryBytes *int64     `json:"memory_bytes,omitempty"`
 	PID         int        `json:"pid,omitempty"`
 	StartedAt   *time.Time `json:"started_at,omitempty"`
+
+	// What the process belongs to, from its world-readable /proc/<pid>/cgroup (InfraNest #4917): the systemd
+	// unit it runs under ("php8.3-fpm.service"), or the short id of the container it runs in. Absent when the
+	// cgroup names neither — a login session, the kernel's own threads.
+	Unit        string `json:"unit,omitempty"`
+	ContainerID string `json:"container_id,omitempty"`
 }
 
 // fail records a collector that did not work, without disturbing the ones that did.

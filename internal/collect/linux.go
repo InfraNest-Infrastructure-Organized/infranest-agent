@@ -363,6 +363,13 @@ func readProcesses(opts Options) ([]Process, error) {
 
 	top := topByMemory(procs, opts.MaxProcesses)
 
+	// What each kept process belongs to (InfraNest #4917) — for the top few only, like the CPU reading below.
+	for i := range top {
+		if body, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", top[i].PID)); err == nil {
+			top[i].Unit, top[i].ContainerID = parseCgroupOwner(string(body))
+		}
+	}
+
 	// A CPU share is a difference between two readings, and the second reading is taken for the **top few
 	// only**. Re-walking all of /proc — three hundred directories on a busy machine — is what made this
 	// column not worth having; ten more file reads is not.
