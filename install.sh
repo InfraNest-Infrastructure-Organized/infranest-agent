@@ -20,6 +20,7 @@ SERVICE="infranest-agent"
 VERSION="latest"
 TOKEN=""
 TOKEN_FILE=""
+ENROLL_KEY=""
 API_URL="https://ingest.infranest.io"
 FROM_FILE=""
 DO_UNINSTALL=0
@@ -37,11 +38,14 @@ usage() {
 Install the InfraNest monitoring agent.
 
   install.sh --token sat_xxxxx
+  install.sh --enroll sek_xxxxx
   install.sh --upgrade
 
 Options:
   --token <token>        the server token, from your server's page in InfraNest
   --token-file <path>    read the token from a file instead, so it never reaches your shell history
+  --enroll <key>         an enrollment key, from Settings → Server agent in InfraNest. The same key
+                         works on every server: each one trades it for a token of its own
   --url <url>            where to send readings (default: https://ingest.infranest.io)
   --version <version>    install a specific version instead of the latest
   --from <path>          install a binary you already have, instead of downloading one
@@ -179,10 +183,55 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # nothing fails and the reader is simply given something that does not work.
 invoked_as_a_file() { [ -f "$0" ] && [ -r "$0" ]; }
 
+# ── Enrollment (InfraNest #4532) ─────────────────────────────────────────────────────────────────────
+# Trade an enrollment key for this server's own token, before anything is installed: a key that is revoked,
+# expired or out of servers stops here with nothing left behind. Asked once per install; running it again on
+# the same machine gets the same server back with a fresh token, so a re-run Ansible role adds nothing.
+#
+# The machine id is sent so that re-install can be recognised. InfraNest keeps only a digest of it together
+# with the hostname, never the id itself.
+machine_id() {
+  for f in /etc/machine-id /var/lib/dbus/machine-id /sys/class/dmi/id/product_uuid; do
+    if [ -r "$f" ]; then
+      id="$(tr -d ' \n' < "$f")"
+      [ -n "$id" ] && { printf '%s' "$id"; return 0; }
+    fi
+  done
+  return 1
+}
+
+# The one value pulled out of a small, known JSON answer; there is no jq on a fresh server.
+json_string() { sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p"; }
+
+enroll() {
+  command -v curl >/dev/null 2>&1 || die "curl is required to enroll"
+  host="$(hostname 2>/dev/null || uname -n)"
+  mid="$(machine_id)" || die "cannot enroll: this machine has no /etc/machine-id. Run systemd-machine-id-setup, or install with --token."
+
+  log "enrolling ${host}"
+  # --retry covers a 429 and a 5xx: a fleet booting from one image enrolls in the same minute.
+  body="$(printf '{"key":"%s","hostname":"%s","machine_id":"%s"}' "$ENROLL_KEY" "$host" "$mid")"
+  out="$(curl -sS --connect-timeout 10 --retry 6 --retry-max-time 180 -w '\n%{http_code}' \
+    -H 'Content-Type: application/json' -H 'Accept: application/json' \
+    -X POST --data "$body" "${API_URL%/}/api/agent/enroll")" || die "could not reach ${API_URL} to enroll"
+
+  status="$(printf '%s' "$out" | tail -n 1)"
+  answer="$(printf '%s' "$out" | sed '$d')"
+  if [ "$status" != "201" ]; then
+    message="$(printf '%s' "$answer" | json_string message)"
+    die "enrollment refused (${status}): ${message:-InfraNest did not say why}"
+  fi
+
+  TOKEN="$(printf '%s' "$answer" | json_string token)"
+  [ -n "$TOKEN" ] || die "enrollment answered without a token"
+  log "enrolled as \"$(printf '%s' "$answer" | json_string name)\""
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --token)      need_value "$@"; TOKEN="$2"; shift 2 ;;
     --token-file) need_value "$@"; TOKEN_FILE="$2"; shift 2 ;;
+    --enroll)     need_value "$@"; ENROLL_KEY="$2"; shift 2 ;;
     --url)        need_value "$@"; API_URL="$2"; URL_GIVEN=1; shift 2 ;;
     --version)    need_value "$@"; VERSION="$2"; shift 2 ;;
     --from)       need_value "$@"; FROM_FILE="$2"; shift 2 ;;
@@ -248,8 +297,8 @@ if [ "$DO_UPGRADE" -eq 1 ]; then
   # rather than ignored: a flag that is accepted and does nothing reads as a flag that worked.
   [ -f "${CONF_DIR}/agent.conf" ] \
     || die "there is no agent to upgrade here (no ${CONF_DIR}/agent.conf). Install it with --token instead."
-  [ -z "${TOKEN}${TOKEN_FILE}" ] \
-    || die "--upgrade keeps the token this machine already has. Run it without --token."
+  [ -z "${TOKEN}${TOKEN_FILE}${ENROLL_KEY}" ] \
+    || die "--upgrade keeps the token this machine already has. Run it without --token or --enroll."
   [ "$URL_GIVEN" -eq 0 ] && [ "$PROCESSES" -eq 0 ] \
     || die "--upgrade leaves the configuration alone. To change a setting, edit ${CONF_DIR}/agent.conf and restart the agent."
 else
@@ -257,7 +306,11 @@ else
     [ -r "$TOKEN_FILE" ] || die "cannot read the token file: $TOKEN_FILE"
     TOKEN="$(cat "$TOKEN_FILE")"
   fi
-  [ -n "$TOKEN" ] || { usage; die "a token is required — get one from your server's page in InfraNest"; }
+  if [ -n "$ENROLL_KEY" ]; then
+    [ -z "$TOKEN" ] || die "use --token or --enroll, not both"
+    enroll
+  fi
+  [ -n "$TOKEN" ] || { usage; die "a token is required — get one from your server's page in InfraNest, or use --enroll"; }
 fi
 
 # ── Which build ──────────────────────────────────────────────────────────────────────────────────────

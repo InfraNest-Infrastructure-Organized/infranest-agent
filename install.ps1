@@ -13,6 +13,9 @@
     .\install.ps1 -Token sat_xxxxx
 
 .EXAMPLE
+    .\install.ps1 -Enroll sek_xxxxx
+
+.EXAMPLE
     .\install.ps1 -Upgrade
 
 .EXAMPLE
@@ -25,6 +28,10 @@ param(
 
     # Read the token from a file instead, so it never reaches your PowerShell history.
     [string]$TokenFile,
+
+    # An enrollment key, from Settings → Server agent in InfraNest. The same key works on every server:
+    # each one trades it for a token of its own.
+    [string]$Enroll,
 
     # Where to send readings.
     [string]$Url = 'https://ingest.infranest.io',
@@ -163,6 +170,46 @@ function Remove-Path {
     return -not (Test-Path $path)
 }
 
+# Trade an enrollment key for this server's own token (InfraNest #4532), before anything is installed: a key
+# that is revoked, expired or out of servers stops here with nothing left behind. Running it again on the same
+# machine gets the same server back with a fresh token. The MachineGuid is sent so that a re-install can be
+# recognised; InfraNest keeps only a digest of it together with the hostname, never the id itself.
+function Invoke-Enroll {
+    $machineId = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography' -Name MachineGuid).MachineGuid
+    if (-not $machineId) { throw 'Cannot enroll: this machine has no MachineGuid. Install with -Token instead.' }
+    $hostName = $env:COMPUTERNAME
+
+    Write-Step "enrolling $hostName"
+    $body = @{ key = $Enroll; hostname = $hostName; machine_id = $machineId } | ConvertTo-Json -Compress
+    $endpoint = $Url.TrimEnd('/') + '/api/agent/enroll'
+
+    # A fleet booting from one image enrolls in the same minute, so a 429 or a 5xx is asked again.
+    for ($attempt = 1; ; $attempt++) {
+        try {
+            $answer = Invoke-RestMethod -Method Post -Uri $endpoint -Body $body -ContentType 'application/json' `
+                -Headers @{ Accept = 'application/json' } -UseBasicParsing -TimeoutSec 30
+            break
+        }
+        catch {
+            $status = 0
+            if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+            if (($status -eq 429 -or $status -ge 500 -or $status -eq 0) -and $attempt -lt 6) {
+                Start-Sleep -Seconds ([math]::Min(30, 5 * $attempt))
+                continue
+            }
+            if ($status -eq 0) { throw "Could not reach $Url to enroll: $($_.Exception.Message)" }
+            $message = $null
+            try { $message = ($_.ErrorDetails.Message | ConvertFrom-Json).message } catch { $message = $null }
+            if (-not $message) { $message = 'InfraNest did not say why' }
+            throw "Enrollment refused ($status): $message"
+        }
+    }
+
+    if (-not $answer.token) { throw 'Enrollment answered without a token.' }
+    Write-Step "enrolled as '$($answer.server.name)'"
+    return $answer.token
+}
+
 function Test-Provenance {
     param($bin)
     $bundle = Join-Path $tmp 'attestation.json'
@@ -244,8 +291,8 @@ if ($Upgrade) {
     if (-not (Test-Path $ConfPath)) {
         throw "There is no agent to upgrade here (no $ConfPath). Install it with -Token instead."
     }
-    if ($Token -or $TokenFile) {
-        throw '-Upgrade keeps the token this machine already has. Run it without -Token.'
+    if ($Token -or $TokenFile -or $Enroll) {
+        throw '-Upgrade keeps the token this machine already has. Run it without -Token or -Enroll.'
     }
     if ($Processes -or $PSBoundParameters.ContainsKey('Url')) {
         throw "-Upgrade leaves the configuration alone. To change a setting, edit $ConfPath and restart the task."
@@ -256,8 +303,12 @@ else {
         if (-not (Test-Path $TokenFile)) { throw "Cannot read the token file: $TokenFile" }
         $Token = (Get-Content $TokenFile -Raw).Trim()
     }
+    if ($Enroll) {
+        if ($Token) { throw 'Use -Token or -Enroll, not both.' }
+        $Token = Invoke-Enroll
+    }
     if (-not $Token) {
-        throw 'A token is required. Get one from your server''s page in InfraNest, then: .\install.ps1 -Token sat_xxxxx'
+        throw 'A token is required. Get one from your server''s page in InfraNest, then: .\install.ps1 -Token sat_xxxxx (or use -Enroll)'
     }
 }
 
