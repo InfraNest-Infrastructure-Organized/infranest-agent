@@ -4,6 +4,7 @@ package collect
 
 import (
 	"fmt"
+	"net/netip"
 	"runtime"
 	"time"
 )
@@ -20,6 +21,7 @@ type Options struct {
 	Renewers     bool
 	Traffic      *TrafficTracker
 	Listening    bool
+	KnownPeers   map[netip.Addr]struct{}
 }
 
 // Collect reports honestly that this platform is not implemented rather than returning zeros.

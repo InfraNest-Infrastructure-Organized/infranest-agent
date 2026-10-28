@@ -86,7 +86,7 @@ func peers(loopback, private, public int) *PeerCounts {
 }
 
 func TestListeningFromTheKernelsTables(t *testing.T) {
-	got, err := collectListening(opener(leTables), binary.LittleEndian)
+	got, err := collectListening(opener(leTables), binary.LittleEndian, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,11 +135,11 @@ func TestABigEndianHostReadsTheSame(t *testing.T) {
 		),
 	}
 
-	fromBE, err := collectListening(opener(be), binary.BigEndian)
+	fromBE, err := collectListening(opener(be), binary.BigEndian, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fromLE, err := collectListening(opener(le), binary.LittleEndian)
+	fromLE, err := collectListening(opener(le), binary.LittleEndian, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestAKernelWithoutIPv6(t *testing.T) {
 	got, err := collectListening(opener(map[string]string{
 		"tcp": table(tcpHeader, row(0, "00000000:0016", v4Any, "0A")),
 		"udp": table(udpHeader),
-	}), binary.LittleEndian)
+	}), binary.LittleEndian, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestAKernelWithoutIPv6(t *testing.T) {
 }
 
 func TestNothingListeningIsAnEmptyListNotNull(t *testing.T) {
-	got, err := collectListening(opener(map[string]string{"tcp": tcpHeader}), binary.LittleEndian)
+	got, err := collectListening(opener(map[string]string{"tcp": tcpHeader}), binary.LittleEndian, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestNothingListeningIsAnEmptyListNotNull(t *testing.T) {
 
 // Without /proc/net/tcp there is no answer, and "nothing listens" is a claim the receiver acts on.
 func TestNoAnswerIsAFailureNotAnEmptyList(t *testing.T) {
-	if _, err := collectListening(opener(map[string]string{}), binary.LittleEndian); err == nil {
+	if _, err := collectListening(opener(map[string]string{}), binary.LittleEndian, nil); err == nil {
 		t.Fatal("a missing /proc/net/tcp reported nothing listening")
 	}
 
@@ -246,7 +246,7 @@ func TestNoAnswerIsAFailureNotAnEmptyList(t *testing.T) {
 		}
 		return opener(leTables)(name)
 	}
-	if _, err := collectListening(refused, binary.LittleEndian); err == nil {
+	if _, err := collectListening(refused, binary.LittleEndian, nil); err == nil {
 		t.Fatal("a tcp6 that exists and refused us was read as a kernel without IPv6")
 	}
 
@@ -258,7 +258,7 @@ func TestNoAnswerIsAFailureNotAnEmptyList(t *testing.T) {
 		"bad state":  tcpHeader + row(0, "00000000:0016", v4Any, "A"),
 		"bad number": tcpHeader + "   x 00000000:0016 00000000:0000 0A\n",
 	} {
-		if _, err := collectListening(opener(map[string]string{"tcp": body}), binary.LittleEndian); !errors.Is(err, errSocketTableFormat) {
+		if _, err := collectListening(opener(map[string]string{"tcp": body}), binary.LittleEndian, nil); !errors.Is(err, errSocketTableFormat) {
 			t.Errorf("%s: got %v", name, err)
 		}
 	}
@@ -271,7 +271,7 @@ func TestTheCapKeepsWhatIsExposedAndCountsTheRest(t *testing.T) {
 		rows = append(rows, row(i, fmt.Sprintf("0100007F:%04X", 10000+i), v4Any, "0A")) // loopback
 	}
 	rows = append(rows, row(150, "00000000:0016", v4Any, "0A")) // the one that matters, listed last
-	got, err := collectListening(opener(map[string]string{"tcp": table(tcpHeader, rows...)}), binary.LittleEndian)
+	got, err := collectListening(opener(map[string]string{"tcp": table(tcpHeader, rows...)}), binary.LittleEndian, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +288,7 @@ func TestAddressesPerPortAreCapped(t *testing.T) {
 	for i := 1; i <= 12; i++ {
 		rows = append(rows, row(i, fmt.Sprintf("%02X00000A:01BB", i), v4Any, "0A")) // 10.0.0.i:443
 	}
-	got, err := collectListening(opener(map[string]string{"tcp": table(tcpHeader, rows...)}), binary.LittleEndian)
+	got, err := collectListening(opener(map[string]string{"tcp": table(tcpHeader, rows...)}), binary.LittleEndian, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +308,7 @@ func TestManyConnectionsMakeTheCountsALowerBound(t *testing.T) {
 		// 203.0.x.y, every one a different peer
 		b.WriteString(row(i+1, "0A00000A:01BB", fmt.Sprintf("%02X%02X%02XCB:C350", i&0xff, (i>>8)&0xff, (i>>16)&0xff), "01"))
 	}
-	got, err := collectListening(opener(map[string]string{"tcp": b.String()}), binary.LittleEndian)
+	got, err := collectListening(opener(map[string]string{"tcp": b.String()}), binary.LittleEndian, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +324,7 @@ func TestALongTableIsReadOnlyThisFar(t *testing.T) {
 	for i := 0; i < maxSocketRows+5; i++ {
 		b.WriteString(row(i+1, "0A00000A:0016", "0500000A:C350", "06"))
 	}
-	got, err := collectListening(opener(map[string]string{"tcp": b.String()}), binary.LittleEndian)
+	got, err := collectListening(opener(map[string]string{"tcp": b.String()}), binary.LittleEndian, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +335,7 @@ func TestALongTableIsReadOnlyThisFar(t *testing.T) {
 
 // The promise in PAYLOAD.md: a peer's address never leaves the machine.
 func TestNoPeerAddressIsSent(t *testing.T) {
-	got, err := collectListening(opener(leTables), binary.LittleEndian)
+	got, err := collectListening(opener(leTables), binary.LittleEndian, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,4 +362,44 @@ func TestTheWorstCaseIsBounded(t *testing.T) {
 		t.Fatalf("worst case is %d bytes", len(b))
 	}
 	t.Logf("worst-case listening: %d bytes", len(b))
+}
+
+// Connections to and from the organization's own servers are reported by address (InfraNest #4903) —
+// those addresses and no others, and only when the receiver sent a list.
+func TestKnownPeersAreTheOnlyAddressesReported(t *testing.T) {
+	outbound, _ := decodeProcAddr("05710033", binary.LittleEndian)
+	known := KnownPeerSet([]string{"10.0.0.5", outbound.String(), "not an address", "0.0.0.0"})
+
+	got, err := collectListening(opener(leTables), binary.LittleEndian, known)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.KnownPeers == nil {
+		t.Fatal("a list was sent, so known_peers must be present")
+	}
+	want := []KnownPeer{
+		{Address: "10.0.0.5", Port: 22, Direction: "in", Connections: 1},
+		{Address: outbound.String(), Port: 443, Direction: "out", Connections: 1},
+	}
+	if !reflect.DeepEqual(*got.KnownPeers, want) {
+		t.Fatalf("got %+v, want %+v", *got.KnownPeers, want)
+	}
+	for _, p := range *got.KnownPeers {
+		if p.Address == "203.0.113.7" {
+			t.Fatal("an address the receiver did not name was reported")
+		}
+	}
+
+	without, err := collectListening(opener(leTables), binary.LittleEndian, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if without.KnownPeers != nil {
+		t.Fatal("with no list, known_peers must be absent rather than empty")
+	}
+
+	empty, _ := collectListening(opener(leTables), binary.LittleEndian, KnownPeerSet(nil))
+	if empty.KnownPeers == nil || len(*empty.KnownPeers) != 0 {
+		t.Fatal("an empty list from the receiver must come back as []")
+	}
 }

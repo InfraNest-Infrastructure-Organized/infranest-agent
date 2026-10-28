@@ -4,6 +4,7 @@ package collect
 
 import (
 	"fmt"
+	"net/netip"
 	"syscall"
 	"time"
 	"unicode/utf16"
@@ -59,7 +60,8 @@ type Options struct {
 	Traffic *TrafficTracker
 	// Accepted and ignored: listening sockets are read from Linux's /proc/net, and the field is absent on
 	// Windows rather than approximated (InfraNest #4019).
-	Listening bool
+	Listening  bool
+	KnownPeers map[netip.Addr]struct{}
 }
 
 // Collect takes one reading on Windows.

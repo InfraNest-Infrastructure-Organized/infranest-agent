@@ -5,6 +5,7 @@ package collect
 import (
 	"encoding/binary"
 	"io"
+	"net/netip"
 	"os"
 )
 
@@ -22,8 +23,11 @@ func ListeningAvailable() bool { return true }
 // No netlink (sock_diag), which `ss` uses: the unit's RestrictAddressFamilies forbids AF_NETLINK, and a
 // forbidden family is a refused socket(), not a crash — but /proc answers the same question with no new
 // permission at all.
-func CollectListening() (*Listening, error) {
+//
+// known is the set of this organization's other servers' addresses from the receiver (InfraNest #4903), or
+// nil when the agent holds none; only connections to those addresses are reported by address.
+func CollectListening(known map[netip.Addr]struct{}) (*Listening, error) {
 	return collectListening(func(name string) (io.ReadCloser, error) {
 		return os.Open("/proc/net/" + name)
-	}, binary.NativeEndian)
+	}, binary.NativeEndian, known)
 }

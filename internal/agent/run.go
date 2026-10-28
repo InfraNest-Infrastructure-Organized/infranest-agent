@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -85,6 +86,9 @@ type Runner struct {
 	serverInterval time.Duration
 	// The last over-ceiling value refused, so a misconfigured plan says so once rather than every push.
 	refusedInterval time.Duration
+	// The organization's other servers, from the last push response that carried them (InfraNest #4903).
+	// In memory only: until the first response after a start the agent holds none, and reports none.
+	knownPeers map[netip.Addr]struct{}
 }
 
 // Run collects on a fixed cadence and delivers whatever is waiting, until the context is cancelled.
@@ -191,6 +195,7 @@ func (r *Runner) collectOnce(seq int64, state *State) {
 		Renewers:     r.Config.Renewers,
 		Traffic:      r.trafficTracker(),
 		Listening:    r.Config.Listening,
+		KnownPeers:   r.knownPeers,
 	})
 	if err != nil {
 		r.logf("collection failed: %v", err)
@@ -379,6 +384,10 @@ func (r *Runner) sendOnce(ctx context.Context, url *string, state *State) error 
 	}
 
 	r.applyCadence(result)
+
+	if result.PeerAddresses != nil {
+		r.knownPeers = collect.KnownPeerSet(*result.PeerAddresses)
+	}
 
 	if adopted, ok := config.Adopt(*url, result.IngestURL); ok {
 		r.logf("InfraNest asked for readings to go to %s from now on", adopted)
