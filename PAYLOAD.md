@@ -6,7 +6,7 @@ This is a **public contract**. The agent is one implementation of it; anyone may
 endpoint does not care which is talking to it. So this document is the specification rather than a
 description of our code, and where the two disagree the endpoint's validation is the authority.
 
-**Contract version 19** — current as of the first agent release after `v0.15.0`.
+**Contract version 20** — current as of the first agent release after `v0.16.0`.
 
 Every change so far has been *additive*, and that is the rule rather than a run of luck: a field is added,
 never repurposed, and never made required after the fact. A sender written against version 1 keeps working
@@ -16,6 +16,7 @@ long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
+| 20 | `disks[]` — read and write throughput and the share of time busy, **per whole disk** rather than summed (InfraNest #4922); `mounts[].disks` — the whole disks each filesystem is stored on, so a mount can be joined to its disk's activity |
 | 19 | `listening.known_peers` — established connections to and from the addresses the receiver sent back as `peer_addresses`, the same organization's other servers, by address, port and direction (InfraNest #4903). Never any other address |
 | 18 | `processes[].unit` / `container_id` — the systemd service or container each reported process belongs to (InfraNest #4917); `services[].last_trigger_at` / `next_elapse_at` — when a timer last fired and fires next (#4945) |
 | 17 | `listening` and `collectors.listening` — every listening TCP port and bound UDP port, the address each is bound to, and for TCP how many distinct peers are connected by class (loopback, private, public). **Counts only — never a peer's address, never a program name** |
@@ -89,10 +90,15 @@ nothing rather than a guess.
 | `pressure_memory_full` / `pressure_io_full` | float 0–100 | The same for **all** runnable tasks stalled at once — time in which the machine did no useful work. CPU has none worth sending: system-wide it is always zero |
 | `network_in_bps` / `network_out_bps` | int ≥0 | Bytes per second received and sent **since the previous sample**, from `/proc/net/dev`. Only interfaces backed by a device (`/sys/class/net/<if>/device`), so a bridge or veth pair does not count a container's traffic twice; where none is (inside a container), every interface but loopback. Absent on the first sample after the agent starts |
 | `disk_read_bps` / `disk_write_bps` | int ≥0 | Bytes per second read and written since the previous sample, from `/proc/diskstats`, whole disks with a device link only — partitions, LVM, md, loop and zram are views of a disk already counted. Absent on the first sample, and where no such disk exists |
+| `disks[]` | array, max 32 | The same whole disks one by one, since the previous sample — the totals above are these rows summed. **Absent on the first sample, and where no such disk exists**. Busiest first; past 32, the least busy are left out. A disk that appeared, vanished or whose counters went backwards since the previous sample is left out of that sample, as it is from the totals |
+| `disks[].name` | string ≤32 | The kernel's name for the disk (`sda`, `nvme0n1`, `vda`) — the name `mounts[].disks` uses |
+| `disks[].read_bps` / `write_bps` | int ≥0 | Bytes per second read and written since the previous sample |
+| `disks[].busy_percent` | float 0–100 | The share of the interval the disk had at least one request in flight (`io_ticks` in `/proc/diskstats`), to one decimal. On a spinning disk 100 means saturated; **an SSD or NVMe disk serves many requests at once, so there 100 means never idle, not unable to take more** — a receiver judging saturation should read it beside `pressure_io`. Absent where the kernel's line carries no `io_ticks` |
 | `mounts[]` | array | Max 64 |
 | `mounts[].mount_point` | string ≤191 | |
 | `mounts[].device` | string ≤191 | |
 | `mounts[].inodes_used` / `inodes_total` | int | From the same `statfs`. A filesystem out of inodes refuses every new file while its bytes still show free space. **Absent where the filesystem keeps no fixed inode table** (btrfs reports zero), which is not "none used" |
+| `mounts[].disks` | array of string ≤32, max 8 | The whole disks this filesystem is stored on, by the names `disks[]` uses (InfraNest #4922). The device above cannot be joined to a disk by its name — `/dev/mapper/ubuntu--vg-ubuntu--lv` and `/dev/root` name none, and an md mirror or a volume group spans several — so the agent follows the kernel's links in `/sys` (world-readable) from the filesystem's device number down through partitions, LVM, dm-crypt and md. For btrfs, whose subvolumes have anonymous device numbers, it starts from the device the mount names, which for a btrfs over several devices is only the one it was mounted from. **Absent where the filesystem is stored on no whole disk** — a network share, tmpfs, a loop device — or the links could not be followed |
 | `mounts[].used_bytes` / `total_bytes` | int | **No percentage.** The server computes it, so a percentage cannot disagree with its own bytes — which is what an alert would then fail to fire on |
 | `processes[]` | array | Max 32 |
 | `processes[].command` | string ≤255 | Executable name by default. Full command lines carry credentials often enough that shipping them must be asked for |
@@ -312,6 +318,11 @@ settled, so a store-and-forward sender keeps it and retries it for ever. The sec
 `listening` arrived after these figures were measured and adds at most **46,441 bytes** to the one sample
 that carries it (100 ports, each with eight IPv6 addresses and seven-digit peer counts) — still well inside
 the limit on the second shape, and one more reason the first cannot be sent.
+
+`disks` and `mounts[].disks` (contract 20) are measurements too and ride on every sample. At their caps —
+32 disks with 32-byte names and ten-digit rates, and eight such names on each of 64 mounts — they add
+**22,026 bytes** to a sample. A full batch of 60 at every cap, snapshots and `listening` on the newest, is
+then about **3.3 MB**: still well inside the limit.
 
 `mounts` is **not** a snapshot and must stay on every sample. It looks like one, but `worst_mount_percent`
 is derived per reading and is what a disk rule averages over its window — a backfilled sample without

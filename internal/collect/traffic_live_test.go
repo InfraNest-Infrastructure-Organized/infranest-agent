@@ -30,8 +30,11 @@ func TestLiveTraffic(t *testing.T) {
 	_ = f.Close()
 	time.Sleep(1500 * time.Millisecond)
 
-	in, out, read, write := tr.observe(readTraffic())
-	t.Logf("in=%v out=%v read=%v write=%v", deref(in), deref(out), deref(read), deref(write))
+	r := tr.observe(readTraffic())
+	t.Logf("in=%v out=%v read=%v write=%v", deref(r.in), deref(r.out), deref(r.read), deref(r.write))
+	for _, d := range r.disks {
+		t.Logf("disk %s: read=%d write=%d busy=%v", d.Name, d.ReadBps, d.WriteBps, deref64(d.BusyPercent))
+	}
 }
 
 func deref(p *int64) any {

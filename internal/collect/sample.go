@@ -33,6 +33,10 @@ type Sample struct {
 	DiskReadBps   *int64 `json:"disk_read_bps,omitempty"`
 	DiskWriteBps  *int64 `json:"disk_write_bps,omitempty"`
 
+	// The same disks one by one, with how much of the interval each was busy (InfraNest #4922). Absent on
+	// the first sample, and where there is no whole disk to report.
+	Disks []Disk `json:"disks,omitempty"`
+
 	// Pressure stall information, percent of the last minute (InfraNest #3827): how long runnable tasks
 	// waited on CPU, memory and I/O — `some` (at least one waiting) and, for memory and I/O, `full` (all of
 	// them). Absent on kernels without PSI.
@@ -91,6 +95,13 @@ type Mount struct {
 	// "none used".
 	InodesUsed  *int64 `json:"inodes_used,omitempty"`
 	InodesTotal *int64 `json:"inodes_total,omitempty"`
+
+	// The whole disks this filesystem is stored on, by the names `disks[]` uses (InfraNest #4922). The
+	// device above cannot be joined to a disk by its name: `/dev/mapper/ubuntu--vg-ubuntu--lv` and
+	// `/dev/root` name no disk, and an md array or an LVM volume spans several. So the agent follows the
+	// kernel's own links in /sys from the filesystem down to the disks. Absent where the filesystem sits on
+	// no block device (a network share, btrfs, ZFS) or the links could not be followed.
+	Disks []string `json:"disks,omitempty"`
 }
 
 // Service is one unit the machine was told to run, and what became of it.
