@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"syscall"
@@ -91,7 +92,9 @@ func Collect(opts Options) (Sample, error) {
 	}
 
 	if opts.Traffic != nil {
-		s.NetworkInBps, s.NetworkOutBps, s.DiskReadBps, s.DiskWriteBps = opts.Traffic.observe(readTraffic())
+		r := opts.Traffic.observe(readTraffic())
+		s.NetworkInBps, s.NetworkOutBps, s.DiskReadBps, s.DiskWriteBps = r.in, r.out, r.read, r.write
+		s.Disks = r.disks
 	}
 
 	if mounts, err := readMounts(); err != nil {
@@ -260,7 +263,8 @@ func statMount(e mountEntry) (Mount, bool) {
 	// A bind-mounted *file* is not a filesystem anyone can fill — it reports the statfs of whatever holds
 	// it. Docker mounts /etc/hosts, /etc/hostname and /etc/resolv.conf this way, so without this check a
 	// container reports the host's disk once per file.
-	if info, err := os.Stat(e.point); err != nil || !info.IsDir() {
+	info, err := os.Stat(e.point)
+	if err != nil || !info.IsDir() {
 		return Mount{}, false
 	}
 
@@ -287,6 +291,8 @@ func statMount(e mountEntry) (Mount, bool) {
 		UsedBytes:  total - avail,
 	}
 	m.InodesUsed, m.InodesTotal = inodeCounts(uint64(st.Files), uint64(st.Ffree))
+
+	m.Disks = mountDisks(info, e.device)
 
 	return m, true
 }
@@ -439,4 +445,28 @@ func readRSS(pid int, pageSize int64) (int64, error) {
 	}
 
 	return parseStatmRSS(string(data), pageSize)
+}
+
+// mountDisks finds the whole disks a mounted filesystem is stored on (InfraNest #4922).
+//
+// By its device number first, which is exact and needs no /dev. Major 0 is the kernel's anonymous devices:
+// an overlay, a network share, or btrfs, which numbers every subvolume anonymously although it sits on a
+// block device. For those, the device the mount table names is followed instead, when it is one under
+// /dev — resolving a link like /dev/mapper/vg-root to /dev/dm-0 is a lookup of the name, not an access
+// to the device.
+func mountDisks(info os.FileInfo, device string) []string {
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		if major, minor := devNumbers(uint64(st.Dev)); major != 0 {
+			return wholeDisks("/sys", major, minor)
+		}
+	}
+
+	if !strings.HasPrefix(device, "/dev/") {
+		return nil
+	}
+	if resolved, err := filepath.EvalSymlinks(device); err == nil {
+		device = resolved
+	}
+
+	return wholeDisksNamed("/sys", filepath.Base(device))
 }
