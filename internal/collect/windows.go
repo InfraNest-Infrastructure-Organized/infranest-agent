@@ -62,6 +62,8 @@ type Options struct {
 	// Windows rather than approximated (InfraNest #4019).
 	Listening  bool
 	KnownPeers map[netip.Addr]struct{}
+	// Accepted and ignored: the package database read is dpkg's, which Windows does not have (InfraNest #5665).
+	Packages *PackageIndex
 }
 
 // Collect takes one reading on Windows.
@@ -108,11 +110,12 @@ func Collect(opts Options) (Sample, error) {
 	}
 
 	// The automatic-start services, so the failed-service rule works here too (#3837).
+	var hosted map[int][]string
 	if opts.Services {
-		if services, err := servicesWindows(); err != nil {
+		if services, byPID, err := servicesWindows(); err != nil {
 			s.fail("services", err)
 		} else {
-			s.Services = services
+			s.Services, hosted = services, byPID
 		}
 	}
 
@@ -120,6 +123,9 @@ func Collect(opts Options) (Sample, error) {
 		if procs, err := processesWindows(opts); err != nil {
 			s.fail("processes", err)
 		} else {
+			// Which services each one hosts (InfraNest #5670): the only way to tell svchost.exe processes apart,
+			// since their command lines are not readable without privilege.
+			attachHostedServices(procs, hosted)
 			s.Processes = procs
 		}
 	}

@@ -81,6 +81,8 @@ type Runner struct {
 	// Each container's last start, between collections (#2809). Made on first use by containerTracker.
 	containers *collect.ContainerTracker
 	traffic    *collect.TrafficTracker
+	// Installed packages by file (InfraNest #5665). Made on first use by packageIndex.
+	packages *collect.PackageIndex
 
 	// The plan's storage cadence, as last stated by a push response (#886). Zero until one says.
 	serverInterval time.Duration
@@ -180,6 +182,16 @@ func (r *Runner) trafficTracker() *collect.TrafficTracker {
 	return r.traffic
 }
 
+// packageIndex is the run loop's index of installed packages (InfraNest #5665), made on first use and held for
+// the life of the process: it is rebuilt only when dpkg's database changes.
+func (r *Runner) packageIndex() *collect.PackageIndex {
+	if r.packages == nil {
+		r.packages = collect.NewPackageIndex()
+	}
+
+	return r.packages
+}
+
 // collectOnce takes one reading and spools it. Never returns an error: a collector that failed is
 // recorded in the reading itself, and a spool that cannot be written is logged rather than fatal —
 // stopping the agent because one write failed would turn a full disk into a monitoring outage, at
@@ -196,6 +208,7 @@ func (r *Runner) collectOnce(seq int64, state *State) {
 		Traffic:      r.trafficTracker(),
 		Listening:    r.Config.Listening,
 		KnownPeers:   r.knownPeers,
+		Packages:     r.packageIndex(),
 	})
 	if err != nil {
 		r.logf("collection failed: %v", err)

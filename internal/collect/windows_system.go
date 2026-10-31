@@ -180,14 +180,19 @@ type queryServiceConfig struct {
 // servicesWindows lists the automatic-start services and how each is doing, in the shape the systemd
 // collector uses: `active` running, `failed` stopped with an error, `inactive` stopped cleanly — many
 // automatic services stop on purpose once their work is done, and only an error exit is a failure.
-func servicesWindows() ([]Service, error) {
+//
+// It also returns every running service by the process it runs in, whatever its start type (InfraNest
+// #5670): Windows Update is a manual, trigger-started service and would never be in the list above, yet it is
+// what one of thirty svchost.exe processes is busy with. The same enumeration answers both, so it costs nothing.
+func servicesWindows() ([]Service, map[int][]string, error) {
 	scm, _, err := procOpenSCManager.Call(0, 0, scManagerEnumerate)
 	if scm == 0 {
-		return nil, err
+		return nil, nil, err
 	}
 	defer func() { _, _, _ = procCloseServiceHandle.Call(scm) }()
 
 	var out []Service
+	hosted := map[int][]string{}
 	var resume uint32
 	buf := make([]byte, 64<<10)
 
@@ -198,23 +203,28 @@ func servicesWindows() ([]Service, error) {
 			uintptr(unsafe.Pointer(&needed)), uintptr(unsafe.Pointer(&returned)), uintptr(unsafe.Pointer(&resume)), 0)
 		more := r == 0 && callErr == syscall.Errno(errorMoreData)
 		if r == 0 && !more {
-			return nil, callErr
+			return nil, nil, callErr
 		}
 
 		entries := unsafe.Slice((*enumServiceStatusProcess)(unsafe.Pointer(&buf[0])), returned)
 		for _, e := range entries {
+			display := utf16PtrToString(e.DisplayName)
+			if e.Status.CurrentState == serviceRunning && e.Status.ProcessID != 0 {
+				pid := int(e.Status.ProcessID)
+				hosted[pid] = append(hosted[pid], display)
+			}
 			if len(out) >= maxWindowsServices {
-				return out, nil
+				continue
 			}
 			name := utf16PtrToString(e.ServiceName)
 			if serviceStartType(scm, e.ServiceName) != serviceAutoStart {
 				continue
 			}
-			out = append(out, windowsService(name, utf16PtrToString(e.DisplayName), e.Status))
+			out = append(out, windowsService(name, display, e.Status))
 		}
 
 		if !more {
-			return out, nil
+			return out, hosted, nil
 		}
 		if int(needed) > len(buf) {
 			buf = make([]byte, needed)
@@ -228,6 +238,8 @@ func windowsService(name, display string, st serviceStatusProcess) Service {
 	switch st.CurrentState {
 	case serviceRunning:
 		svc.ActiveState, svc.SubState = "active", "running"
+		// The process it runs in (InfraNest #5670) — zero for a driver or a service the SCM has no process for.
+		svc.PID = int(st.ProcessID)
 	case serviceStartPending:
 		svc.ActiveState, svc.SubState = "activating", "start-pending"
 	case serviceStopPending:

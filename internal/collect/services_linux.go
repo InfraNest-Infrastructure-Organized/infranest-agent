@@ -193,6 +193,13 @@ func collectContainers(conn *dbus.Conn, units []dbus.Unit, tracker *ContainerTra
 
 		c := Container{ID: id, Runtime: runtime, ActiveState: clip(unit.ActiveState, maxState)}
 
+		// Where its processes are listed (InfraNest #5710). The scope's own cgroup when systemd says, else the
+		// place systemd puts a scope it was not told otherwise about.
+		c.cgroup = "/system.slice/" + unit.Name
+		if cg, err := conn.ScopeControlGroup(unit.Path); err == nil && strings.HasPrefix(cg, "/") {
+			c.cgroup = cg
+		}
+
 		if at, err := conn.ActiveEnteredAt(unit.Path); err == nil && !at.IsZero() {
 			c.StartedAt = &at
 			n := tracker.observe(id, at, now)

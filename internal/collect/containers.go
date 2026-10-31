@@ -38,6 +38,31 @@ type Container struct {
 
 	// What the container's cgroup is using, in bytes. Absent where systemd keeps no memory accounting.
 	MemoryBytes *uint64 `json:"memory_bytes,omitempty"`
+
+	// The container's main process (InfraNest #5710): the lowest process ID in the scope's world-readable
+	// `cgroup.procs`, past an init shim such as tini, and its name from /proc/<pid>/stat. What names a
+	// container whose processes are too small to be among the reported few. Absent when the cgroup could not
+	// be read.
+	MainPID     int    `json:"main_pid,omitempty"`
+	MainProcess string `json:"main_process,omitempty"`
+	// Its whole command line — only when command lines are switched on (ProcessArgs), clipped like a process's.
+	MainCommand string `json:"main_command,omitempty"`
+
+	// The ports Docker publishes for it, from the command lines of its `docker-proxy` processes (InfraNest
+	// #5710). Absent where none is published, where Docker's userland proxy is off (the firewall forwards the
+	// port and no process says so), or where the container's address could not be read.
+	Ports []PublishedPort `json:"ports,omitempty"`
+
+	// Where the scope's processes are listed: its cgroup below the cgroup root. Not sent.
+	cgroup string
+}
+
+// PublishedPort is one port Docker publishes on the host for a container (InfraNest #5710).
+type PublishedPort struct {
+	Protocol      string `json:"protocol"`
+	HostIP        string `json:"host_ip,omitempty"`
+	HostPort      int    `json:"host_port"`
+	ContainerPort int    `json:"container_port"`
 }
 
 // maxContainers bounds one collection, matching the server's cap. A host running more than this is a

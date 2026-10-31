@@ -164,6 +164,11 @@ type Service struct {
 	// other unit, and for a timer that has never fired or is not scheduled.
 	LastTriggerAt *time.Time `json:"last_trigger_at,omitempty"`
 	NextElapseAt  *time.Time `json:"next_elapse_at,omitempty"`
+
+	// Windows only (InfraNest #5670): the process the service runs in, while it runs — the Service Control
+	// Manager's own answer, already read to list the service. What joins a service to its row in `processes`,
+	// and so names the svchost.exe it lives in. Absent when the service is not running.
+	PID int `json:"pid,omitempty"`
 }
 
 // Process is one of the busiest few. Command carries no arguments unless the operator turned them on:
@@ -180,6 +185,15 @@ type Process struct {
 	// cgroup names neither — a login session, the kernel's own threads.
 	Unit        string `json:"unit,omitempty"`
 	ContainerID string `json:"container_id,omitempty"`
+
+	// The installed package its executable belongs to (InfraNest #5665), from dpkg's world-readable database.
+	// Absent when it could not be placed on a file of an installed package, and for anything in a container.
+	Package *Package `json:"package,omitempty"`
+
+	// Windows only (InfraNest #5670): the services this process hosts, by their display names — what tells one
+	// svchost.exe from thirty others. Every running service the Service Control Manager lists with this process
+	// ID, whatever its start type. Absent where it hosts none.
+	Services []string `json:"services,omitempty"`
 }
 
 // fail records a collector that did not work, without disturbing the ones that did.
