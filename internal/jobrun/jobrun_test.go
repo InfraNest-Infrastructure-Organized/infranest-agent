@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -53,7 +54,9 @@ func TestAFailedRunSendsItsLastLinesMasked(t *testing.T) {
 	if !strings.Contains(out, "line 0\n") || !strings.Contains(errOut, "hunter2") {
 		t.Fatal("the output must pass through unchanged")
 	}
-	if len(r.Output) != jobs.MaxLines || r.Output[len(r.Output)-1] != "connecting with password=[masked]" {
+	// stdout and stderr are read separately, so their lines may interleave in either order at the end: the
+	// masked stderr line must be among the last lines, not at one fixed position.
+	if len(r.Output) != jobs.MaxLines || !slices.Contains(r.Output, "connecting with password=[masked]") || !slices.Contains(r.Output, "line 29") {
 		t.Fatalf("last lines: %q", r.Output)
 	}
 	if strings.Contains(strings.Join(r.Output, "\n"), "hunter2") {
