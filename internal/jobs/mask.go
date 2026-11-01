@@ -29,8 +29,9 @@ var secrets = []*regexp.Regexp{
 	regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{30,}`),
 	regexp.MustCompile(`\bnpm_[A-Za-z0-9]{30,}`),
 	regexp.MustCompile(`\bdop_v1_[a-f0-9]{64}\b`),
-	// A Slack incoming webhook: the path is the credential, the host stays.
-	regexp.MustCompile(`(hooks\.slack\.com/services/)\S+`),
+	// A Slack incoming webhook: the path is the credential, the host stays. Matched by the path's own shape
+	// (/services/T…/B…/secret) rather than the host, which is all the masking needs.
+	regexp.MustCompile(`(/services/)T[A-Za-z0-9]+/B[A-Za-z0-9]+/[A-Za-z0-9]+`),
 	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b`),
 	// A password in a URL: scheme://user:secret@host, the user possibly empty (redis://:secret@host).
 	regexp.MustCompile(`(://[^\s:/@]*:)[^\s@/]+@`),
