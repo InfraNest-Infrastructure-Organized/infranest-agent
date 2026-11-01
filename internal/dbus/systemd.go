@@ -292,6 +292,13 @@ func (c *Conn) StateChangedAt(unitPath string) (time.Time, error) {
 	return c.unitTimestamp(unitPath, "StateChangeTimestamp")
 }
 
+// FragmentPath is the file systemd loaded the unit from — "/lib/systemd/system/ssh.service" (InfraNest #5789).
+// Empty for a unit with no file of its own, a transient one. Which package installed that file is what names a
+// unit that is not running.
+func (c *Conn) FragmentPath(unitPath string) (string, error) {
+	return c.unitPropertyString(unitPath, unitInterface, "FragmentPath")
+}
+
 // ActiveEnteredAt is when the unit last became active (#2809).
 //
 // For a container's scope this is when the container started, and since every restart is a new scope, it

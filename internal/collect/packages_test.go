@@ -271,7 +271,7 @@ func TestEachProcessIsPlacedByTheStrongestEvidenceItHas(t *testing.T) {
 	}
 
 	body, _ := json.Marshal(procs[0])
-	if !strings.Contains(string(body), `"package":{"name":"nginx-core","version":"1.24.0-2ubuntu7.1","description":"nginx web/proxy server (standard version)","source":"dpkg","match":"executable"}`) {
+	if !strings.Contains(string(body), `"package":{"name":"nginx-core","version":"1.24.0-2ubuntu7.1","description":"nginx web/proxy server (standard version)","source":"dpkg","match":"executable","priority":"optional"}`) {
 		t.Fatalf("%s", body)
 	}
 	// The command line read to find the file is never what is sent.
