@@ -125,11 +125,15 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer, dir string) 
 
 // Run starts the command, passes its input and output through, and returns what happened and the code to exit with.
 func Run(opts Options, stdin io.Reader, stdout, stderr io.Writer, now func() time.Time) (jobs.Report, int) {
-	tail := &tailBuffer{max: jobs.MaxLines}
+	// One tail per output. The two arrive through separate pipes, read independently, so their order is not
+	// the order the command wrote them in: a shared tail could let 20 later stdout lines push out the stderr
+	// line that says why the job failed.
+	outTail := &tailBuffer{max: jobs.MaxLines}
+	errTail := &tailBuffer{max: jobs.MaxLines}
 	cmd := exec.Command(opts.Command[0], opts.Command[1:]...)
 	cmd.Stdin = stdin
-	cmd.Stdout = io.MultiWriter(stdout, tail)
-	cmd.Stderr = io.MultiWriter(stderr, tail)
+	cmd.Stdout = io.MultiWriter(stdout, outTail)
+	cmd.Stderr = io.MultiWriter(stderr, errTail)
 
 	started := now()
 	report := jobs.Report{ID: jobs.NewID(), Job: opts.Job, StartedAt: started.UTC()}
@@ -186,7 +190,7 @@ func Run(opts Options, stdin io.Reader, stdout, stderr io.Writer, now func() tim
 		if opts.NoOutput {
 			report.OutputWithheld = true
 		} else {
-			report.Output = jobs.MaskLines(tail.lines())
+			report.Output = jobs.MaskLines(lastLines(outTail.lines(), errTail.lines(), jobs.MaxLines))
 		}
 	}
 
@@ -195,7 +199,26 @@ func Run(opts Options, stdin io.Reader, stdout, stderr io.Writer, now func() tim
 
 var forwarded = []os.Signal{os.Interrupt, syscall.SIGTERM}
 
-// tailBuffer keeps the last lines written to it, from both of the command's outputs in the order they arrived.
+// lastLines is what a failed run reports: the last lines of its output, then its last error lines — up to half
+// the room is kept for errors, so the line saying why it failed is never pushed out by ordinary output.
+func lastLines(out, errs []string, max int) []string {
+	keepErr := len(errs)
+	if keepErr > max/2 && len(out) > 0 {
+		keepErr = max / 2
+	}
+	if keepErr > max {
+		keepErr = max
+	}
+	errs = errs[len(errs)-keepErr:]
+	room := max - len(errs)
+	if len(out) > room {
+		out = out[len(out)-room:]
+	}
+
+	return append(append([]string(nil), out...), errs...)
+}
+
+// tailBuffer keeps the last lines written to one of the command's outputs.
 type tailBuffer struct {
 	mu      sync.Mutex
 	max     int

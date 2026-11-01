@@ -4,9 +4,9 @@ package jobrun
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -54,9 +54,8 @@ func TestAFailedRunSendsItsLastLinesMasked(t *testing.T) {
 	if !strings.Contains(out, "line 0\n") || !strings.Contains(errOut, "hunter2") {
 		t.Fatal("the output must pass through unchanged")
 	}
-	// stdout and stderr are read separately, so their lines may interleave in either order at the end: the
-	// masked stderr line must be among the last lines, not at one fixed position.
-	if len(r.Output) != jobs.MaxLines || !slices.Contains(r.Output, "connecting with password=[masked]") || !slices.Contains(r.Output, "line 29") {
+	// The error line is always kept, after the output's last lines, whatever order the two pipes were read in.
+	if len(r.Output) != jobs.MaxLines || r.Output[len(r.Output)-1] != "connecting with password=[masked]" || r.Output[len(r.Output)-2] != "line 29" {
 		t.Fatalf("last lines: %q", r.Output)
 	}
 	if strings.Contains(strings.Join(r.Output, "\n"), "hunter2") {
@@ -120,5 +119,27 @@ func TestParse(t *testing.T) {
 	var w bytes.Buffer
 	if code := Main([]string{"--job"}, strings.NewReader(""), &w, &w, ""); code != 2 {
 		t.Fatalf("a usage error exits 2, got %d", code)
+	}
+}
+
+// Up to half the report is kept for error lines, and output fills the rest — neither pushes the other out.
+func TestLastLinesKeepsRoomForErrors(t *testing.T) {
+	out := make([]string, 30)
+	for i := range out {
+		out[i] = fmt.Sprintf("out %d", i)
+	}
+	errs := make([]string, 30)
+	for i := range errs {
+		errs[i] = fmt.Sprintf("err %d", i)
+	}
+	got := lastLines(out, errs, 20)
+	if len(got) != 20 || got[0] != "out 20" || got[9] != "out 29" || got[10] != "err 20" || got[19] != "err 29" {
+		t.Fatalf("both outputs crowded: %q", got)
+	}
+	if got := lastLines(nil, errs, 20); len(got) != 20 || got[19] != "err 29" {
+		t.Fatalf("errors alone fill the report: %q", got)
+	}
+	if got := lastLines(out, []string{"why"}, 20); len(got) != 20 || got[18] != "out 29" || got[19] != "why" {
+		t.Fatalf("one error line after 19 of output: %q", got)
 	}
 }
