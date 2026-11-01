@@ -88,6 +88,11 @@ type System struct {
 	// How the machine patches and reboots itself, when a tool for it is installed (InfraNest #3825). Nil
 	// where neither unattended-upgrades nor dnf-automatic is — which is "a person does it", not "off".
 	AutoUpdate *AutoUpdate `json:"auto_update,omitempty"`
+
+	// How the machine itself is set up (InfraNest #5815, contract 24): SSH's login settings, the administrator groups
+	// and where automatic updates are decided. Linux only, read by a SetupReader the run loop holds; nil elsewhere and
+	// when nothing could be read.
+	Setup *Setup `json:"setup,omitempty"`
 }
 
 // ProStatus is the part of `pro status` that decides whether a machine is still being patched.
