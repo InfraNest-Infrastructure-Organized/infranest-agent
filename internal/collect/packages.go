@@ -32,13 +32,24 @@ type Package struct {
 	//     is what it says it is;
 	//   - "name": the kernel's name for the process looked up among the standard program directories, used
 	//     only when exactly one package installs a program of that name there.
+	//
+	// And for a systemd unit (InfraNest #5789), "unit_file": the file systemd loaded the unit from, its
+	// `FragmentPath`, is one the package installed. Exact — dpkg lists the file by name.
 	Match string `json:"match"`
+	// dpkg's `Priority` — "required", "important", "standard", "optional" or "extra" — and `Section` ("admin",
+	// "universe/net"), as the packager set them (InfraNest #5789). The first three priorities are what a
+	// minimal Debian or Ubuntu system installs, which is what tells the base system's own units from software
+	// somebody added. Absent when the package does not say.
+	Priority string `json:"priority,omitempty"`
+	Section  string `json:"section,omitempty"`
 }
 
 const (
 	maxPackageName        = 128
 	maxPackageVersion     = 128
 	maxPackageDescription = 255
+	maxPackagePriority    = 32
+	maxPackageSection     = 64
 
 	// Bounds on one rebuild of the index. A Debian or Ubuntu server has a few hundred to a few thousand
 	// packages and tens of thousands of files; these are far past that, and are here so a corrupt or
@@ -59,15 +70,24 @@ const (
 var programDirs = []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"}
 
 type packageInfo struct {
-	name, version, description string
+	name, version, description, priority, section string
 }
+
+// The directories systemd loads unit files from that a package may install into (InfraNest #5789), and the two
+// an administrator writes their own into. A unit file in /etc/systemd/system that no package owns was written
+// on this machine — by hand, or by an installer script — and is the machine's own.
+var (
+	unitDirs      = []string{"/lib/systemd/system", "/usr/lib/systemd/system", "/etc/systemd/system", "/usr/local/lib/systemd/system"}
+	localUnitDirs = []string{"/etc/systemd/system", "/usr/local/lib/systemd/system"}
+)
 
 // PackageIndex maps a file path to the dpkg package that installed it. Built from dpkg's database and kept
 // between collections; rebuilt only when the status file's modification time moves (and not more often than
 // minIndexRebuild), so a steady machine reads one `stat` per collection and nothing else.
 //
-// Only files under a `bin`, `sbin` or `libexec` directory are indexed — the places executables live —
-// which keeps the index to a few thousand entries rather than every file the system has.
+// Only files under a `bin`, `sbin` or `libexec` directory are indexed — the places executables live — and the
+// `.service` and `.timer` files directly in systemd's unit directories (InfraNest #5789), which keeps the index
+// to a few thousand entries rather than every file the system has.
 type PackageIndex struct {
 	statusPath string
 	infoDir    string
@@ -175,13 +195,15 @@ func parseDpkgStatus(r io.Reader) map[string]packageInfo {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64<<10), 1<<20)
 
-	var name, arch, version, description, status string
+	var name, arch, version, description, status, priority, section string
 	flush := func() {
 		if name != "" && version != "" && strings.HasSuffix(status, " installed") && len(out) < maxIndexedPackages {
 			p := packageInfo{
 				name:        clip(name, maxPackageName),
 				version:     clip(version, maxPackageVersion),
 				description: clip(description, maxPackageDescription),
+				priority:    clip(priority, maxPackagePriority),
+				section:     clip(section, maxPackageSection),
 			}
 			if arch != "" {
 				out[name+":"+arch] = p
@@ -190,7 +212,7 @@ func parseDpkgStatus(r io.Reader) map[string]packageInfo {
 				out[name] = p
 			}
 		}
-		name, arch, version, description, status = "", "", "", "", ""
+		name, arch, version, description, status, priority, section = "", "", "", "", "", "", ""
 	}
 
 	for scanner.Scan() {
@@ -220,6 +242,10 @@ func parseDpkgStatus(r io.Reader) map[string]packageInfo {
 			status = value
 		case "Description":
 			description = value
+		case "Priority":
+			priority = value
+		case "Section":
+			section = value
 		}
 	}
 	flush()
@@ -227,7 +253,7 @@ func parseDpkgStatus(r io.Reader) map[string]packageInfo {
 	return out
 }
 
-// readDpkgLists reads every package's file list and indexes the executables among them.
+// readDpkgLists reads every package's file list and indexes the executables and unit files among them.
 func readDpkgLists(dir string, packages map[string]packageInfo) (byPath, byName map[string]string) {
 	byPath = map[string]string{}
 	byName = map[string]string{}
@@ -272,7 +298,7 @@ func readDpkgLists(dir string, packages map[string]packageInfo) (byPath, byName 
 	return byPath, byName
 }
 
-// indexList adds one package's executables to the index. A path claimed by two packages is dropped from the
+// indexList adds one package's executables and unit files to the index. A path claimed by two packages is dropped from the
 // name index (ambiguous) and kept by the first for the path index — dpkg itself refuses two owners of one file
 // outside diversions, so a clash here is a diversion and the first owner is the one dpkg lists first.
 func indexList(r io.Reader, key string, byPath, byName map[string]string) {
@@ -280,7 +306,7 @@ func indexList(r io.Reader, key string, byPath, byName map[string]string) {
 	scanner.Buffer(make([]byte, 16<<10), 64<<10)
 	for scanner.Scan() {
 		path := scanner.Text()
-		if !executablePath(path) {
+		if !executablePath(path) && !unitFilePath(path) {
 			continue
 		}
 		if len(byPath) >= maxIndexedPaths {
@@ -322,6 +348,99 @@ func executablePath(path string) bool {
 	return false
 }
 
+// unitFilePath is whether a listed path is a service or timer unit file directly in one of systemd's unit
+// directories — the units the agent reports. Drop-ins (`foo.service.d/override.conf`) are not the unit's own
+// file and are not indexed.
+func unitFilePath(path string) bool {
+	if !strings.HasSuffix(path, ".service") && !strings.HasSuffix(path, ".timer") {
+		return false
+	}
+	dir := filepath.Dir(path)
+	for _, d := range unitDirs {
+		if dir == d {
+			return true
+		}
+	}
+
+	return false
+}
+
+// localUnitFile is whether systemd loaded a unit from a directory an administrator writes into.
+func localUnitFile(path string) bool {
+	dir := filepath.Dir(filepath.Clean(path))
+	for _, d := range localUnitDirs {
+		if dir == d {
+			return true
+		}
+	}
+
+	return false
+}
+
+// fragmentSource answers, for one unit's D-Bus object path, the file systemd loaded the unit from. The system
+// bus connection is one; a test passes its own answers.
+type fragmentSource interface {
+	FragmentPath(unitPath string) (string, error)
+}
+
+// readFragments asks for the unit file of each reported service (InfraNest #5789): one property read per unit,
+// on the connection the services collector already holds, after the list was cut to what is sent. An error or an
+// empty answer leaves it unknown — a unit with no file of its own (a transient unit) has none.
+func readFragments(services []Service, src fragmentSource) {
+	if src == nil {
+		return
+	}
+	for i := range services {
+		if services[i].objectPath == "" {
+			continue
+		}
+		if path, err := src.FragmentPath(services[i].objectPath); err == nil && strings.HasPrefix(path, "/") {
+			services[i].fragment = path
+		}
+	}
+}
+
+// attachUnitPackages names the package each reported unit's file belongs to (InfraNest #5789), from the same
+// index as the processes' packages, and marks the unit local when its file sits in an administrator's directory
+// and no package owns it. Nothing is said about a unit whose file could not be read or placed — absent, never
+// guessed. A unit loaded from /run (a generator's output) is neither.
+func attachUnitPackages(services []Service, idx *PackageIndex, now time.Time) {
+	if len(services) == 0 {
+		return
+	}
+	indexed := false
+	if idx != nil {
+		idx.mu.Lock()
+		defer idx.mu.Unlock()
+		indexed = idx.refresh(now)
+	}
+
+	for i := range services {
+		s := &services[i]
+		if s.fragment == "" {
+			continue
+		}
+		if indexed {
+			if p, ok := idx.lookup(s.fragment); ok {
+				s.Package = p.toPackage("unit_file")
+
+				continue
+			}
+		}
+		if localUnitFile(s.fragment) {
+			local := true
+			s.Local = &local
+		}
+	}
+}
+
+func (p packageInfo) toPackage(match string) *Package {
+	return &Package{
+		Name: p.name, Version: p.version, Description: p.description,
+		Source: "dpkg", Match: match, Priority: p.priority, Section: p.section,
+	}
+}
+
 // attachPackages names the package of each reported process (InfraNest #5665), for the reported few only.
 //
 // A process inside a container is skipped: its files are the container's image, not this machine's packages,
@@ -357,10 +476,7 @@ func attachPackages(procs []Process, idx *PackageIndex, procRoot string, now tim
 		}
 
 		if pkg, match, ok := idx.resolve(dir, comm); ok {
-			p.Package = &Package{
-				Name: pkg.name, Version: pkg.version, Description: pkg.description,
-				Source: "dpkg", Match: match,
-			}
+			p.Package = pkg.toPackage(match)
 		}
 	}
 }

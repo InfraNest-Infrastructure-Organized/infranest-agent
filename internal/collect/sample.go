@@ -169,6 +169,22 @@ type Service struct {
 	// Manager's own answer, already read to list the service. What joins a service to its row in `processes`,
 	// and so names the svchost.exe it lives in. Absent when the service is not running.
 	PID int `json:"pid,omitempty"`
+
+	// The installed package the unit's file belongs to (InfraNest #5789): systemd's `FragmentPath` looked up in
+	// dpkg's world-readable file lists, the same index as processes[].package. What names a unit that is not
+	// running — a finished one-shot, a timer — by the package that installed it. Absent when it could not be
+	// placed, which is not "none".
+	Package *Package `json:"package,omitempty"`
+
+	// True when systemd loaded the unit from /etc/systemd/system or /usr/local/lib/systemd/system and no
+	// installed package owns that file: written on this machine, by an administrator or an installer script.
+	// Absent otherwise — including when it could not be told.
+	Local *bool `json:"local,omitempty"`
+
+	// The unit's D-Bus object path and the file systemd loaded it from, kept between reading the list and
+	// placing the file on a package. Neither is sent.
+	objectPath string
+	fragment   string
 }
 
 // Process is one of the busiest few. Command carries no arguments unless the operator turned them on:

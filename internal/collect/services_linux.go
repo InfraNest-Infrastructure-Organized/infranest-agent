@@ -96,6 +96,7 @@ func CollectUnits(tracker *ContainerTracker) ([]Service, []Container, error) {
 			Description: clip(unit.Description, maxDescription),
 			ActiveState: clip(unit.ActiveState, maxState),
 			SubState:    clip(unit.SubState, maxState),
+			objectPath:  unit.Path,
 		}
 
 		if unit.Path != "" {
@@ -173,6 +174,10 @@ func CollectUnits(tracker *ContainerTracker) ([]Service, []Container, error) {
 	if len(services) > maxServices {
 		services = services[:maxServices]
 	}
+
+	// Which file each unit was loaded from (InfraNest #5789), for the units being sent only — what the
+	// collection then places on an installed package.
+	readFragments(services, conn)
 
 	return services, containers, nil
 }

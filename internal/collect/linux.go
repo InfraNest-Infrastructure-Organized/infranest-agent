@@ -122,6 +122,8 @@ func Collect(opts Options) (Sample, error) {
 		if services, containers, err := CollectUnits(opts.Containers); err != nil {
 			s.fail("services", err)
 		} else {
+			// Which package installed each unit's file (InfraNest #5789), from the same index as the processes'.
+			attachUnitPackages(services, opts.Packages, time.Now())
 			s.Services = services
 			if containers != nil {
 				// What runs in each and what it publishes (InfraNest #5710), from /sys and /proc.
