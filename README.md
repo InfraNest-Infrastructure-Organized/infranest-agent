@@ -67,7 +67,7 @@ is the first thing documented rather than a debugging flag buried at the bottom.
 | **Certificate renewers** | what renews this machine's certificates, and whether its last run worked: certbot's renewal configs (which certificates, which authenticator) and its systemd timer (when it last ran, how it finished, when it runs next); Caddy's and Traefik's certificate stores where they can be read. Only world-readable files — certbot's configs are; **private keys are never opened**, and Caddy's and Traefik's stores are owner-only on a stock install, so for those the agent reports that the store is there and refused it rather than reading it. `INFRANEST_RENEWERS=0` turns it off |
 | **Listening ports** | every TCP port in `LISTEN` and every bound, unconnected UDP port, read from `/proc/net/tcp`, `tcp6`, `udp` and `udp6` — which are world-readable — with the address each is bound to and whether that is every address, a specific one, or loopback only. For each TCP port, **how many distinct machines are connected, by class** (loopback, private, public). **Counts only: the addresses of whoever connects are never sent** — they are your own clients, and nothing here needs them. **No program names** either: linking a socket to its process means reading `/proc/<pid>/fd`, which an unprivileged agent can do only for itself, so the agent reports that a port listens and never guesses by whom. Lets InfraNest compare a firewall's open ports with what actually listens behind them. `INFRANEST_LISTENING=0` turns it off; not collected on Windows |
 | **Cron jobs** | what cron runs here: `/etc/crontab`, `/etc/cron.d/*` and the scripts in `/etc/cron.hourly`, `daily`, `weekly` and `monthly` — when each runs, as which user, and the name of the program it runs. **The command itself only with `INFRANEST_PROCESS_ARGS`**: cron lines are where people put passwords. Your users' own crontabs (`crontab -e`, `/var/spool/cron`) are readable by root alone and are **never opened** — the agent does not run as root. Read again only when a file changes. `INFRANEST_CRON=0` turns it off; Linux only |
-| **Why a service failed** | **Off until you turn it on.** With it, a service that fails, is killed for memory or starts restarting in a loop sends **its last 20 lines from the system log**, once, masked like a failed job's output — and every hour, **how many errors and warnings each unit logged**. Never the log itself. **Login records are never sent.** Turned on by letting the agent's user read the journal — see [Reading the system log](#reading-the-system-log-when-something-fails). `INFRANEST_JOURNAL=0` keeps it off even then; Linux only |
+| **Why a service failed** | **Off until you turn it on.** With it, a service that fails, is killed for memory or starts restarting in a loop sends **its last 20 lines from the system log**, once, masked like a failed job's output — and every hour, **how many errors and warnings each unit logged** and **how many login attempts were refused** (a number, never who or from where). Never the log itself. **Login records are never sent.** Turned on by letting the agent's user read the journal — see [Reading the system log](#reading-the-system-log-when-something-fails). `INFRANEST_JOURNAL=0` keeps it off even then; Linux only |
 | **Containers** | Docker and Podman containers that are running, how much memory each is using, and **how often each has restarted**: a container in a restart loop is `Up` every time anyone looks. Read from the scope units systemd keeps for each container, over the same D-Bus connection as the services above — **never from the Docker socket**, which is root on the host. The cost is that containers are known by their short ID, not their name — so **what runs in each** is sent instead: the container's main process, the first one in its world-readable `cgroup.procs` (past an init shim such as tini), by its name; its command line only when command lines are switched on. And **the ports Docker publishes for it**, read from the command lines of Docker's `docker-proxy` processes, which hold nothing but addresses and port numbers: only those five flags are read, in memory, and the command line itself is never sent. With Docker's userland proxy switched off no process says which port goes where, and none is reported. Hosts on Docker's older `cgroupfs` driver have no such units and report none |
 
 A failed unit is worth its own line here because it is the failure that moves no number: a backup timer
@@ -186,6 +186,14 @@ gh attestation verify infranest-agent_linux_amd64 \
   --repo InfraNest-Infrastructure-Organized/infranest-agent \
   --signer-workflow InfraNest-Infrastructure-Organized/infranest-agent/.github/workflows/release.yml \
   --bundle infranest-agent.sigstore.json
+
+# The same check with cosign instead of gh (cosign 2.4 or later; 3.x prints a deprecation note for
+# --new-bundle-format and verifies all the same). verify-blob-attestation, not verify-blob: the bundle is a
+# signed statement *about* the binary (SLSA build provenance), not a signature over its bytes.
+cosign verify-blob-attestation --bundle infranest-agent.sigstore.json --new-bundle-format \
+  --type slsaprovenance1 --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/InfraNest-Infrastructure-Organized/infranest-agent/\.github/workflows/release\.yml@refs/tags/v' \
+  infranest-agent_linux_amd64
 
 # What it is. Clone the tag, build it, compare the hash to SHA256SUMS.
 # This one needs no trust in us at all.
@@ -396,7 +404,9 @@ sudo gpasswd -d infranest-agent systemd-journal && sudo systemctl restart infran
 - **What leaves**: when a service fails, is killed for memory or restarts three times in a day, its last 20 lines
   from the hour before, at info priority or more urgent, once — with anything shaped like a password, token or key
   masked, the same rules as a failed job's output, and masked again when it arrives. Every hour, a count of each
-  unit's errors and warnings. **Never the log itself**, never a line from a service that did not fail, never debug
+  unit's errors and warnings, and of **failed login attempts** — refused SSH passwords, probes for accounts that
+  do not exist, refused sudo and su passwords. Only the number: the auth lines are read on the machine to be
+  counted and never leave it ([which lines](PAYLOAD.md#failed-logins)). **Never the log itself**, never a line from a service that did not fail, never debug
   lines, never a user's own journal.
 - **Login records are never sent.** When a login service fails — sshd, systemd-logind, getty, sudo, su, polkit, a
   display manager, xrdp, cockpit, sssd, winbind, nslcd, fail2ban, crowdsec, sshguard — InfraNest is told that it
@@ -422,17 +432,32 @@ namespace: a container with its own namespace has its own tables, so a port Dock
 when something on the host listens for it (`docker-proxy` does; Docker with the userland proxy turned off
 does not).
 
+#### The sandbox — verify it yourself
+
+The unit ([`packaging/infranest-agent.service`](packaging/infranest-agent.service), which `install.sh` writes
+verbatim — CI fails if the two differ) runs the agent as its own user with no capability, no way to gain one, a
+read-only view of the system, no home directories, no devices, no kernel tunables or modules, no new namespaces, a
+syscall allow-list with the privileged and resource-changing calls taken out, and only IP and unix sockets. Ask
+systemd how exposed that leaves it:
+
 ```
-User=infranest-agent
-NoNewPrivileges=yes
-CapabilityBoundingSet=
-ProtectSystem=strict
-ProtectHome=yes
-PrivateTmp=yes
-RestrictAddressFamilies=AF_INET AF_INET6
-MemoryMax=64M
-CPUQuota=5%
+systemd-analyze security infranest-agent
 ```
+
+On Ubuntu 24.04 (systemd 255) that reads **1.4 OK** — 0 is a unit that can do nothing, 10 one with no
+restrictions at all, and a stock service with none of these settings scores 9.6. CI runs the same command on every
+change and fails if the number rises. What is left, and why each stays:
+
+| Still flagged | Why it stays |
+|---|---|
+| `PrivateNetwork`, `IPAddressDeny`, `RestrictAddressFamilies=~AF_INET/AF_INET6` | It has to send its readings. The address it sends to is configurable, so there is no fixed allow-list to pin |
+| `RestrictAddressFamilies=~AF_UNIX` | The only way to ask systemd which units have failed is its D-Bus socket (read-only: see the unit's comment) |
+| `ProtectProc`, `ProcSubset` | Listing the busiest processes, and reading memory, CPU and network counters, *is* reading `/proc`. `ProtectProc=invisible` would leave it seeing only itself |
+| `PrivateUsers` | It would map every other user to `nobody`, so neither process owners nor the `systemd-journal` opt-in would work |
+| `DeviceAllow` (`char-rtc:r`) | Added by `ProtectClock=yes` itself, so the clock can be read and not set |
+| `RootDirectory` | The agent reads the host's own files; a separate root would show it nothing |
+
+The limits are set in the unit too: `MemoryMax=64M`, `CPUQuota=5%`, `TasksMax=32`.
 
 The token lives in `/etc/infranest/agent.conf`, mode 0600, loaded with `EnvironmentFile=` — never
 `Environment=` in the unit, which `systemctl show` exposes to any local user. On Windows the same file

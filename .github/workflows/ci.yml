@@ -521,6 +521,17 @@ jobs:
           fi
           python3 -c "import json; s=json.load(open('sample.json')); print('collected; system.time_synced =', (s.get('system') or {}).get('time_synced'))"
 
+      # The README publishes the unit's exposure score (InfraNest #5868): 1.4 on systemd 255, from 1.9 before it.
+      # A directive dropped or loosened raises it, and that is a promise quietly broken — so it fails here. The
+      # threshold is the score times ten. Raise it only together with the README, and say why in the commit.
+      - name: The unit is no more exposed than the README says
+        run: |
+          systemd-analyze --version | head -1
+          if ! systemd-analyze security --offline=true --threshold=14 --no-pager packaging/infranest-agent.service; then
+            echo "::error::systemd-analyze security scores the unit above 1.4, the figure the README publishes."
+            exit 1
+          fi
+
   invariant:
     name: It only sends
     runs-on: ubuntu-latest

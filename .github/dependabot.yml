@@ -1,0 +1,21 @@
+# Weekly updates for what this repository pins: the GitHub Actions (by commit SHA, so nothing else moves them) and Go
+# modules. go.mod has no third-party module today and CI fails the build if one appears without a decision; gomod is
+# watched so one admitted later is not left to age. Minor and patch updates arrive as one pull request per ecosystem;
+# a major version comes on its own, because it is the one worth reading.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      gomod-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]

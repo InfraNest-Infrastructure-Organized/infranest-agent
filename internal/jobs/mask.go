@@ -21,9 +21,20 @@ var secrets = []*regexp.Regexp{
 	regexp.MustCompile(`\bxox[abposr]-[A-Za-z0-9-]{10,}\b`),
 	regexp.MustCompile(`\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b`),
 	regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`),
+	// Provider tokens with a prefix of their own (InfraNest #5867), before the generic long-run rules below — which
+	// would otherwise take a token's tail and leave its prefix, or swallow part of the host in front of it.
+	regexp.MustCompile(`\bglpat-[A-Za-z0-9_-]{20,}`),
+	regexp.MustCompile(`\bwhsec_[A-Za-z0-9+/=]{20,}`),
+	regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{20,}`),
+	regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{30,}`),
+	regexp.MustCompile(`\bnpm_[A-Za-z0-9]{30,}`),
+	regexp.MustCompile(`\bdop_v1_[a-f0-9]{64}\b`),
+	// A Slack incoming webhook: the path is the credential, the host stays. Matched by the path's own shape
+	// (/services/T…/B…/secret) rather than the host, which is all the masking needs.
+	regexp.MustCompile(`(/services/)T[A-Za-z0-9]+/B[A-Za-z0-9]+/[A-Za-z0-9]+`),
 	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b`),
-	// A password in a URL: scheme://user:secret@host.
-	regexp.MustCompile(`(://[^\s:/@]+:)[^\s@/]+@`),
+	// A password in a URL: scheme://user:secret@host, the user possibly empty (redis://:secret@host).
+	regexp.MustCompile(`(://[^\s:/@]*:)[^\s@/]+@`),
 	// An Authorization header's credential.
 	regexp.MustCompile(`(?i)\b((?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic|token)?\s*)\S+`),
 	regexp.MustCompile(`(?i)\b((?:pass(?:word)?|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)\s*[:=]\s*)\S+`),

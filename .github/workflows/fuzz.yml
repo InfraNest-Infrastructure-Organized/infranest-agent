@@ -1,0 +1,51 @@
+name: Fuzz
+
+# The journal reader parses files written by journald, whose contents any process on the machine can shape: a
+# message is whatever a program chose to log. It is fuzzed here on a schedule (InfraNest #5868), because a crash in
+# it is a monitoring agent that stops reporting on exactly the machines where something is logging strangely.
+#
+# Short and weekly rather than long and rare: a regression lands within a week, and five minutes is enough to
+# re-cover what the seed corpus (systemd's own files, both layouts, and the failed-login fixture) reaches. A
+# failure fails this workflow — GitHub mails whoever last changed the schedule — and the crasher is uploaded, so
+# it can be added to testdata/fuzz and kept as a regression test.
+
+on:
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: How long to fuzz (a Go duration)
+        default: 5m
+
+permissions:
+  contents: read
+
+jobs:
+  journal:
+    name: Fuzz the journal reader
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: FuzzOpen
+        env:
+          FUZZTIME: ${{ inputs.fuzztime || '5m' }}
+        run: |
+          if ! go test ./internal/journal -run '^$' -fuzz '^FuzzOpen$' -fuzztime "$FUZZTIME"; then
+            echo "::error::The journal reader crashed on a fuzzed file. The input is attached to this run as 'crasher'; add it under internal/journal/testdata/fuzz/FuzzOpen and fix the reader."
+            exit 1
+          fi
+
+      - name: Keep the input that crashed it
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: crasher
+          path: internal/journal/testdata/fuzz/
+          if-no-files-found: ignore

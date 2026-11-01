@@ -285,6 +285,9 @@ type Hour struct {
 	More int `json:"more,omitempty"`
 	// The hour had more entries than MaxScan, so the counts are of its newest part only.
 	Partial bool `json:"partial,omitempty"`
+	// Refused login attempts in the hour, from auth and authpriv lines (authfail.go): a number, never who or from where.
+	// Always sent, so zero is an answer and an older agent's absent field is not.
+	AuthFailures int `json:"auth_failures"`
 }
 
 // MaxUnits is how many units one hour names: the noisiest.
@@ -301,6 +304,7 @@ func CountHour(hour time.Time) Hour {
 func countHour(files []*openFile, hour time.Time) Hour {
 	end := hour.Add(time.Hour)
 	counts := map[string]*UnitCount{}
+	authFailures := 0
 	scanned := 0
 	partial := false
 	for _, f := range files {
@@ -313,6 +317,14 @@ func countHour(files []*openFile, hour time.Time) Hour {
 			continue
 		}
 		f.Backward(hour, MaxScan-scanned, func(e Entry) bool {
+			// Before the unit and priority filters: sshd writes a refused password at info, and an attempt counts
+			// whatever unit it was logged under. The message is read, classified and dropped here.
+			if e.At.Before(end) && authFacility(e) {
+				if msg, _ := f.Message(e); authFailure(e.Identifier, msg) {
+					authFailures++
+				}
+			}
+
 			if e.Unit == "" || !e.At.Before(end) || e.Priority < 0 || e.Priority > 4 {
 				return true
 			}
@@ -337,7 +349,7 @@ func countHour(files []*openFile, hour time.Time) Hour {
 		}
 	}
 
-	out := Hour{Hour: hour.UTC(), Units: []UnitCount{}, Partial: partial}
+	out := Hour{Hour: hour.UTC(), Units: []UnitCount{}, Partial: partial, AuthFailures: authFailures}
 	for _, c := range counts {
 		out.Units = append(out.Units, *c)
 	}

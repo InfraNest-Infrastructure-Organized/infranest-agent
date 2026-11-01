@@ -6,7 +6,7 @@ This is a **public contract**. The agent is one implementation of it; anyone may
 endpoint does not care which is talking to it. So this document is the specification rather than a
 description of our code, and where the two disagree the endpoint's validation is the authority.
 
-**Contract version 25** — current as of the first agent release after `v0.21.0`.
+**Contract version 26** — current as of the first agent release after `v0.22.0`.
 
 Every change so far has been *additive*, and that is the rule rather than a run of luck: a field is added,
 never repurposed, and never made required after the fact. A sender written against version 1 keeps working
@@ -16,7 +16,8 @@ long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
-| 25 | `journal` alongside the samples — whether the system journal is read here and why not, on every push from Linux; a unit's last lines, masked, once, when it fails, is killed for memory or starts restarting in a loop; and each hour's error and warning counts per unit (InfraNest #5848). **Read only when the machine's owner has added the agent's user to `systemd-journal`**, and never with `INFRANEST_JOURNAL=0`. **Login records are never sent**: a login service's event carries no lines and `lines_withheld: "login"`, and a login record is dropped from any unit's lines (InfraNest #5859, agent v0.22.1) |
+| 26 | `journal.hours[].auth_failures` — how many times in the hour somebody tried to sign in and was refused, counted from the system journal's auth and authpriv lines (InfraNest #5868). **A number only**: the lines are read on the machine to be classified and are never sent. Same opt-in as the rest of `journal` |
+| 25 | `journal` alongside the samples — whether the system journal is read here and why not, on every push from Linux; a unit's last lines, masked, once, when it fails, is killed for memory or starts restarting in a loop; and each hour's error and warning counts per unit (InfraNest #5848). **Read only when the machine's owner has added the agent's user to `systemd-journal`**, and never with `INFRANEST_JOURNAL=0`. **Login records are never sent**: a login service's event carries no lines and `lines_withheld: "login"`, and a login record is dropped from any unit's lines (InfraNest #5859, agent v0.23.0) |
 | 24 | `system.setup` — how the machine itself is set up, from world-readable files only (InfraNest #5815): sshd's effective global login settings with the file and line that decided each, the members of the `sudo`, `wheel` and `admin` groups, and where automatic updates are switched on or off. Linux only; Windows sends nothing new |
 | 23 | `cron[]` — what cron runs: the jobs in `/etc/crontab` and `/etc/cron.d`, and the scripts in the run-parts folders, with schedule, user, program and time zone (InfraNest #5801); `job_runs[]` alongside the samples — how each run of a job wrapped in `infranest-agent run --job` ended; `collectors.cron` and `collectors.job_reports` |
 | 22 | `services[].package` — the dpkg package that installed each unit's file, matched on the file systemd loaded the unit from, and `services[].local` — a unit written on this machine (InfraNest #5789); `priority` and `section` on every package, `processes[].package` included |
@@ -256,7 +257,7 @@ snapshot**: a report is sent once more after a lost response, and the receiver k
 | `job_runs[].exit_code` | int 0–255 | The command's own. Killed by a signal: 128 + its number, as a shell reports it. Could not be started: 126, or 127 when not found |
 | `job_runs[].signal` | string ≤16 | The signal that ended it |
 | `job_runs[].error` | string ≤255 | Why it could not be started |
-| `job_runs[].output` | array of string ≤512, max 20 | **Only when it failed**, and never with `--no-output`: its last lines, stdout and stderr in the order they came, with anything shaped like a password, token or key replaced by `[masked]` — the rules InfraNest applies to a ticket it files, and the receiver applies them again |
+| `job_runs[].output` | array of string ≤512, max 20 | **Only when it failed**, and never with `--no-output`: its last lines, stdout and stderr in the order they came, with anything shaped like a password, token or key replaced by `[masked]` — the rules InfraNest applies to a ticket it files, and the receiver applies them again. Both ends are tested against one corpus of lines and expected results, [`testdata/masking-corpus.json`](testdata/masking-corpus.json) |
 | `job_runs[].output_withheld` | bool | It failed, and `--no-output` kept its output on the machine |
 | `job_runs[].user` | string ≤64 | Who ran it: **the report file's owner, read by the agent** — never what the report says about itself, because the folder is writable by anyone. A receiver should not believe a run reported for a job on another user's line |
 
@@ -278,10 +279,10 @@ The agent reads the journal files itself — `/var/log/journal/*/system*.journal
 reader of the documented file format. It starts no process (`journalctl` is not used) and links no library. A user's
 own journal is never opened. It reads seven things from an entry: its time, `PRIORITY`, `MESSAGE`, the unit it is
 about (`UNIT=` on systemd's own lines about a unit, else `_SYSTEMD_UNIT`), and — only to decide what is a login record —
-`SYSLOG_FACILITY`, `SYSLOG_IDENTIFIER` and `_TRANSPORT`. A message journald stored compressed (over 512 bytes, by
+`SYSLOG_FACILITY`, `SYSLOG_IDENTIFIER` and `_TRANSPORT` (the first two also count [failed logins](#failed-logins)). A message journald stored compressed (over 512 bytes, by
 default) is **skipped and counted**, never decompressed or guessed at.
 
-**Login records are never sent** (InfraNest #5859, agent v0.22.1). Masking looks for secrets; it does not touch a user
+**Login records are never sent** (InfraNest #5859, agent v0.23.0). Masking looks for secrets; it does not touch a user
 name or an address, and a login service's last lines are made of them (`Accepted publickey for jaspar from
 203.0.113.7`). So, on the machine:
 
@@ -303,7 +304,7 @@ name or an address, and a login service's last lines are made of them (`Accepted
 3. **A login service's per-connection instance is named by its template**: `sshd@3-10.0.0.1:22-203.0.113.7:51234.service`
    carries the peer's address, so `journal` names it `sshd@.service`, in its event and in the hourly counts.
 
-The hourly counts are numbers per unit and still count these lines.
+The hourly counts are numbers per unit and still count these lines, and an hour's [failed logins](#failed-logins) are counted from the auth lines before they are dropped — a number, never the line.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -319,7 +320,7 @@ The hourly counts are numbers per unit and still count these lines.
 | `journal.events[].lines[].message` | string ≤300 bytes | Control characters removed, invalid UTF-8 replaced |
 | `journal.events[].compressed` | int | Entries in the window whose message was stored compressed and not read |
 | `journal.events[].truncated` | bool | A line was cut at 300 bytes, a message at 2 KB, or the oldest lines were left out to keep the event within 6 KB |
-| `journal.events[].lines_withheld` | string | `login` — the unit is a login service (above): `lines` is `[]` because its lines are login records, and the agent did not read them. Absent otherwise. Agent v0.22.1 and later; an older agent never sends it |
+| `journal.events[].lines_withheld` | string | `login` — the unit is a login service (above): `lines` is `[]` because its lines are login records, and the agent did not read them. Absent otherwise. Agent v0.23.0 and later; an older agent never sends it |
 | `journal.hours[]` | array, max 6 | Each complete hour's counts, sent on the first push after the hour ends (and the hour before the agent started, on its first push). Kept until a push lands |
 | `journal.hours[].hour` | RFC3339 | The hour's start, UTC |
 | `journal.hours[].units[]` | array, max 20 | The units that logged at priority 4 or more urgent in the hour, the most errors first. `[]` for a quiet hour |
@@ -327,9 +328,33 @@ The hourly counts are numbers per unit and still count these lines.
 | `journal.hours[].units[].errors` / `warnings` | int | Priority 0–3, and priority 4 |
 | `journal.hours[].more` | int | Units left out past the twenty |
 | `journal.hours[].partial` | bool | The hour had more than 200,000 entries; the counts are of its newest 200,000 |
+| `journal.hours[].auth_failures` | int | Refused login attempts in the hour (contract 26) — see [Failed logins](#failed-logins) below. **Always sent, `0` included**; absent only from an agent before v0.23.0, which does not count them |
 
 **What is never sent**: the log itself, any line from a unit that did not fail or loop, a line at debug priority, a
 user's journal, a login record, or any field of an entry beyond the message, its time and priority, and its unit.
+
+### Failed logins
+
+`journal.hours[].auth_failures` (contract 26, agent v0.23.0) is how many times in the hour somebody tried to sign in to
+the machine and was refused. It is a count and nothing else: no user name, no address, no program, no line. To make it,
+the agent reads the message of each entry written to the `auth` or `authpriv` syslog facility (`SYSLOG_FACILITY` 4 or
+10, where sshd, dropbear and PAM write on every distribution), decides whether it is a refusal, and drops it. No other
+entry is read for this.
+
+One attempt is one count:
+
+| Counted | Written by | Why this line and not its neighbours |
+|---|---|---|
+| `Failed password for …`, `Failed keyboard-interactive/pam for …` | sshd (`SYSLOG_IDENTIFIER` `sshd`, `sshd-session` or `sshd-auth`) | A password tried against an account that exists |
+| `Invalid user … from …` | sshd | A connection naming an account that does not exist — once per connection, so its `Failed password for invalid user …` lines are not counted again |
+| `Bad password attempt for …`, `Login attempt for nonexistent user …` | dropbear | dropbear's wording for the same two |
+| `pam_<module>(<service>:auth): authentication failure` | PAM, for any service **but sshd** | A password refused by sudo, su, login, the web console. For sshd the line above already counted the attempt |
+
+Not counted: `Failed publickey` (a client offering its keys in turn is how key login works), `Failed none` (a probe for
+which methods are offered), sudo's `N incorrect password attempts` summary and su's `FAILED SU` (PAM's line already
+counted those), and sshd's wording from any other program or on any other facility. A program that words a refusal
+differently is missed rather than over-counted. Like the other hourly counts, it covers at most the hour's newest
+200,000 entries (`partial`).
 
 ## `disk_usage`
 
@@ -490,7 +515,7 @@ Contract 23 adds `cron[]` to the snapshot sample — at its caps, 200 jobs each 
 lines). Both together still leave a full batch well inside the limit. A real server has a dozen cron lines, and a
 report from a successful run carries no output at all.
 
-Contract 25 adds `journal` beside the samples. At its caps — 10 events of 40 lines of 300 bytes, and 6 hours of 20
+Contract 26 adds one integer per hour to it. Contract 25 adds `journal` beside the samples. At its caps — 10 events of 40 lines of 300 bytes, and 6 hours of 20
 units with 256-byte names — it is under **150 KB**; the agent's own 6 KB budget per event keeps a real one far below
 that, and a push with nothing to tell carries `{"readable": true, "reason": "ok"}`.
 

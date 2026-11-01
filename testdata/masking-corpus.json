@@ -1,0 +1,70 @@
+{
+  "source": "Copied from InfraNest backend/tests/Fixtures/masking-corpus.json (InfraNest PR #5875, #5867). Change it there first, then copy it here, keeping two characters written as JSON escapes (xoxb\\u002d, dop\\u005fv1_) so GitHub push protection does not take the invented tokens for real ones; the decoded values are identical. internal/jobs/corpus_test.go runs Mask and MaskLines over it.",
+  "about": "One corpus for both ends of the agent's masking (#5867): the agent masks a line before it leaves the server, InfraNest masks it again on arrival (FindingTicketBody::maskSecrets). Both must turn every `input` into exactly its `expected`, so the two lists of shapes cannot drift apart unseen. The agent repository imports this same file — change it here, then there. Every value is invented; none is a live credential.",
+  "marker": "[masked]",
+  "lines": [
+    { "name": "a sentence about a password is not a password", "input": "FATAL: password authentication failed for user \"backup\"", "expected": "FATAL: password authentication failed for user \"backup\"" },
+    { "name": "a path stays", "input": "/var/backups/shop.sql.gz written", "expected": "/var/backups/shop.sql.gz written" },
+    { "name": "an address and a port stay", "input": "listening on 0.0.0.0:6379 and [2001:db8::1]:443", "expected": "listening on 0.0.0.0:6379 and [2001:db8::1]:443" },
+    { "name": "a UUID stays", "input": "job 3f2b8c1e-9d4a-4e7b-8a6f-0c1d2e3f4a5b finished", "expected": "job 3f2b8c1e-9d4a-4e7b-8a6f-0c1d2e3f4a5b finished" },
+    { "name": "a timestamp stays", "input": "2026-11-01T12:00:00Z backup done in 42s", "expected": "2026-11-01T12:00:00Z backup done in 42s" },
+
+    { "name": "password=", "input": "uploading with password=hunter2 now", "expected": "uploading with password=[masked] now" },
+    { "name": "passwd:", "input": "passwd: correct-horse-battery", "expected": "passwd: [masked]" },
+    { "name": "pwd=", "input": "login pwd=Tr0ub4dor&3 ok", "expected": "login pwd=[masked] ok" },
+    { "name": "secret =", "input": "client secret = s3cr3t-value", "expected": "client secret = [masked]" },
+    { "name": "API_KEY:", "input": "export API_KEY: abc123", "expected": "export API_KEY: [masked]" },
+    { "name": "api-key=", "input": "curl ?api-key=0f0f0f", "expected": "curl ?api-key=[masked]" },
+    { "name": "access_key=", "input": "access_key=EXAMPLEACCESS", "expected": "access_key=[masked]" },
+    { "name": "private_key:", "input": "private_key: EXAMPLEPRIVATE", "expected": "private_key: [masked]" },
+    { "name": "token =", "input": "token = ghp_EXAMPLEexampleEXAMPLEexample0000", "expected": "token = [masked]" },
+
+    { "name": "GitHub classic token", "input": "using ghp_EXAMPLEexampleEXAMPLEexample0000 for the clone", "expected": "using [masked] for the clone" },
+    { "name": "GitHub OAuth token", "input": "gho_EXAMPLEexampleEXAMPLEexample0000 refused", "expected": "[masked] refused" },
+    { "name": "GitHub fine-grained token", "input": "github_pat_EXAMPLE0example0EXAMPLE0example", "expected": "[masked]" },
+    { "name": "GitLab token", "input": "push with glpat-EXAMPLEexample00000000 failed", "expected": "push with [masked] failed" },
+    { "name": "Linear key", "input": "lin_api_EXAMPLEexampleEXAMPLEexample", "expected": "[masked]" },
+    { "name": "Slack bot token", "input": "slack xoxb\u002d0000000000-EXAMPLEexample", "expected": "slack [masked]" },
+    { "name": "Slack webhook", "input": "POST https://hooks.slack.com/services/T00000000/B00000000/EXAMPLEexampleEXAMPLE00 500", "expected": "POST https://hooks.slack.com/services/[masked] 500" },
+    { "name": "Stripe secret key", "input": "stripe sk_live_0123456789abcdefABCD", "expected": "stripe [masked]" },
+    { "name": "Stripe webhook secret", "input": "whsec_EXAMPLEexampleEXAMPLEexample00 invalid", "expected": "[masked] invalid" },
+    { "name": "OpenAI-style key", "input": "OPENAI sk-proj-EXAMPLEexampleEXAMPLEexample0000", "expected": "OPENAI [masked]" },
+    { "name": "Anthropic-style key", "input": "using sk-ant-api03-EXAMPLEexampleEXAMPLEexample00 now", "expected": "using [masked] now" },
+    { "name": "Google API key", "input": "maps key AIzaEXAMPLEexampleEXAMPLEexample0000000 denied", "expected": "maps key [masked] denied" },
+    { "name": "npm token", "input": "//registry.npmjs.org/:_authToken=npm_EXAMPLEexampleEXAMPLEexample00000000", "expected": "//registry.npmjs.org/:_authToken=[masked]" },
+    { "name": "DigitalOcean token", "input": "doctl dop\u005fv1_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "expected": "doctl [masked]" },
+    { "name": "Hetzner-style 64-character token", "input": "hcloud EXAMPLEexampleEXAMPLEexampleEXAMPLEexampleEXAMPLEexample0000", "expected": "hcloud [masked]" },
+    { "name": "AWS access key id", "input": "aws AKIAABCDEFGHIJKLMNOP done", "expected": "aws [masked] done" },
+    { "name": "AWS secret access key", "input": "aws_secret_access_key=EXAMPLEexampleEXAMPLEexample/EXAMPLE0000", "expected": "aws_secret_access_key=[masked]" },
+    { "name": "JWT", "input": "got eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJleGFtcGxlIn0.EXAMPLEexampleEXAMPLE back", "expected": "got [masked] back" },
+    { "name": "32 hex characters", "input": "sum 0123456789abcdef0123456789abcdef ok", "expected": "sum [masked] ok" },
+
+    { "name": "URL credentials", "input": "psql postgres://backup:s3cret@db.internal/shop", "expected": "psql postgres://backup:[masked]@db.internal/shop" },
+    { "name": "URL credentials with an empty user", "input": "redis://:s3cret@cache.internal:6379/0", "expected": "redis://:[masked]@cache.internal:6379/0" },
+    { "name": "MySQL connection string", "input": "mysql://root:hunter2@127.0.0.1:3306/app", "expected": "mysql://root:[masked]@127.0.0.1:3306/app" },
+    { "name": "MongoDB connection string", "input": "mongodb+srv://app:hunter2@cluster0.example.net/db", "expected": "mongodb+srv://app:[masked]@cluster0.example.net/db" },
+    { "name": "ADO.NET connection string", "input": "Server=db;User Id=sa;Password=hunter2;", "expected": "Server=db;User Id=sa;Password=[masked]" },
+    { "name": "a URL with no credentials stays", "input": "GET https://example.com/health 200", "expected": "GET https://example.com/health 200" },
+
+    { "name": "Authorization: Bearer", "input": "Authorization: Bearer abc.def.ghi", "expected": "Authorization: Bearer [masked]" },
+    { "name": "Authorization: Basic", "input": "authorization: Basic dXNlcjpwYXNz", "expected": "authorization: Basic [masked]" },
+    { "name": "Proxy-Authorization", "input": "Proxy-Authorization: Basic dXNlcjpwYXNz", "expected": "Proxy-Authorization: Basic [masked]" },
+    { "name": "curl -H Authorization", "input": "curl -H \"Authorization: token EXAMPLE\" https://api.example.com", "expected": "curl -H \"Authorization: token [masked] https://api.example.com" },
+
+    { "name": "a private key's first line", "input": "-----BEGIN OPENSSH PRIVATE KEY-----", "expected": "[masked]" }
+  ],
+  "blocks": [
+    {
+      "name": "a private key block, line by line",
+      "input": ["before", "-----BEGIN OPENSSH PRIVATE KEY-----", "b3BlbnNzaC1rZXktdjEAAAAABG5vbmU", "AAAAEbm9uZQAAAAAAAAABAAAAMwAAAAt", "-----END OPENSSH PRIVATE KEY-----", "after"],
+      "kept": ["before", "after"],
+      "gone": ["b3BlbnNzaC1rZXktdjEAAAAABG5vbmU", "AAAAEbm9uZQAAAAAAAAABAAAAMwAAAAt"]
+    },
+    {
+      "name": "an RSA private key block",
+      "input": ["-----BEGIN RSA PRIVATE KEY-----", "MIIEowIBAAKCAQEAexampleEXAMPLE", "-----END RSA PRIVATE KEY-----", "done"],
+      "kept": ["done"],
+      "gone": ["MIIEowIBAAKCAQEAexampleEXAMPLE"]
+    }
+  ]
+}
