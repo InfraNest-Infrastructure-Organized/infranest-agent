@@ -24,11 +24,14 @@ type fakeSender struct {
 	usageSends int
 	// What the runner said it collects, so a test can assert the config reaches the wire.
 	collectors []push.Collectors
-	answer     func(n int) (push.Result, error)
+	// The job reports each push carried (InfraNest #5801), nil where it carried none.
+	jobRuns []any
+	answer  func(n int) (push.Result, error)
 }
 
-func (f *fakeSender) Send(_ context.Context, url string, samples []json.RawMessage, _ map[string]string, usage any, collectors push.Collectors) (push.Result, error) {
+func (f *fakeSender) Send(_ context.Context, url string, samples []json.RawMessage, _ map[string]string, usage any, jobRuns any, collectors push.Collectors) (push.Result, error) {
 	f.batches = append(f.batches, samples)
+	f.jobRuns = append(f.jobRuns, jobRuns)
 	f.collectors = append(f.collectors, collectors)
 	f.urls = append(f.urls, url)
 	if usage != nil {

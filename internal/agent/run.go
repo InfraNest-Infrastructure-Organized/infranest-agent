@@ -13,6 +13,7 @@ import (
 
 	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/collect"
 	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/config"
+	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/jobs"
 	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/push"
 	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/spool"
 )
@@ -49,7 +50,7 @@ const maxServerInterval = time.Hour
 // Sender is what Run pushes through. An interface so the loop can be tested without a network, which is
 // the only way its retry and backoff behaviour is testable at all.
 type Sender interface {
-	Send(ctx context.Context, url string, samples []json.RawMessage, failed map[string]string, usage any, collectors push.Collectors) (push.Result, error)
+	Send(ctx context.Context, url string, samples []json.RawMessage, failed map[string]string, usage any, jobRuns any, collectors push.Collectors) (push.Result, error)
 }
 
 type Runner struct {
@@ -83,6 +84,10 @@ type Runner struct {
 	traffic    *collect.TrafficTracker
 	// Installed packages by file (InfraNest #5665). Made on first use by packageIndex.
 	packages *collect.PackageIndex
+	// The cron definitions, cached until a file changes (InfraNest #5801). Made on first use by cronReader.
+	cron *collect.CronReader
+	// Whether the job reports folder could be read on the last push, for `collectors.job_reports`.
+	jobsFolder bool
 
 	// The plan's storage cadence, as last stated by a push response (#886). Zero until one says.
 	serverInterval time.Duration
@@ -192,6 +197,19 @@ func (r *Runner) packageIndex() *collect.PackageIndex {
 	return r.packages
 }
 
+// cronReader is the run loop's cron reader (InfraNest #5801): nil when the collector is switched off, so the
+// reading carries no `cron` at all rather than an empty list that would clear the server's.
+func (r *Runner) cronReader() *collect.CronReader {
+	if !r.Config.Cron || !collect.CronAvailable() {
+		return nil
+	}
+	if r.cron == nil {
+		r.cron = collect.NewCronReader()
+	}
+
+	return r.cron
+}
+
 // collectOnce takes one reading and spools it. Never returns an error: a collector that failed is
 // recorded in the reading itself, and a spool that cannot be written is logged rather than fatal —
 // stopping the agent because one write failed would turn a full disk into a monitoring outage, at
@@ -209,6 +227,7 @@ func (r *Runner) collectOnce(seq int64, state *State) {
 		Listening:    r.Config.Listening,
 		KnownPeers:   r.knownPeers,
 		Packages:     r.packageIndex(),
+		Cron:         r.cronReader(),
 	})
 	if err != nil {
 		r.logf("collection failed: %v", err)
@@ -329,9 +348,19 @@ func (r *Runner) sendOnce(ctx context.Context, url *string, state *State) error 
 		usage = r.pendingUsage
 	}
 
+	// What `infranest-agent run --job` left since the last push (InfraNest #5801). Not spooled with the readings:
+	// the folder is already the queue, and a report is deleted only once a push carrying it has been answered.
+	// Untyped nil when there are none, for the same reason as the usage scan above.
+	waiting, jobsErr := jobs.Take(jobs.Dir(r.Config.JobsDir), jobs.MaxPerPush, r.Now())
+	r.jobsFolder = jobsErr == nil && jobs.Dir(r.Config.JobsDir) != ""
+	var jobRuns any
+	if len(waiting) > 0 {
+		jobRuns = jobs.Reports(waiting, r.Config.JobOutput)
+	}
+
 	// What this agent is configured to collect, sent every push rather than once at install: the config
 	// can be edited and the agent restarted, and nothing else would tell the server that happened.
-	result, err := r.Sender.Send(ctx, *url, samples, nil, usage, push.Collectors{
+	result, err := r.Sender.Send(ctx, *url, samples, nil, usage, jobRuns, push.Collectors{
 		Processes:   r.Config.Processes,
 		ProcessArgs: r.Config.ProcessArgs,
 		// Only where there is a systemd to ask (#3836): on OpenRC or runit it is not switched on, it is absent.
@@ -340,6 +369,9 @@ func (r *Runner) sendOnce(ctx context.Context, url *string, state *State) error 
 		// False where the platform has no such collector (Windows), so it never reads as "on, and
 		// nothing listens".
 		Listening: r.Config.Listening && collect.ListeningAvailable(),
+		Cron:      r.Config.Cron && collect.CronAvailable(),
+		// Whether `infranest-agent run --job` has a folder to report into (InfraNest #5801).
+		JobReports: r.jobsFolder,
 	})
 
 	if !result.ServerTime.IsZero() {
@@ -378,6 +410,8 @@ func (r *Runner) sendOnce(ctx context.Context, url *string, state *State) error 
 	// hour old is worth less than the one the next scan will produce, and queueing them would send a
 	// backlog of stale answers after an outage.
 	r.pendingUsage = nil
+	// The same for the job reports: taken, so gone from the folder.
+	jobs.Remove(waiting)
 
 	// Only now. A reading is deleted when the server has said it stored it — never when the request
 	// merely completed, because a 502 from something in front of us completes too.

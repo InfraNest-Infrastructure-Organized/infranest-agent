@@ -51,6 +51,9 @@ type Options struct {
 	// dpkg's world-readable database. Rides on the process list; skipped when nil. Held by the run loop, so the
 	// index is built once and rebuilt only when the database changes.
 	Packages *PackageIndex
+	// Cron reads the cron definitions any user can read (InfraNest #5801), cached until a file changes. Skipped when
+	// nil, and read on Linux only.
+	Cron *CronReader
 }
 
 // Collect takes one reading.
@@ -145,6 +148,12 @@ func Collect(opts Options) (Sample, error) {
 	if opts.Renewers {
 		renewers := CollectRenewers()
 		s.Renewers = &renewers
+	}
+
+	if opts.Cron != nil {
+		// Files any user can read; the users' own crontabs are root's alone and are never opened.
+		jobs := opts.Cron.Read("/", opts.ProcessArgs)
+		s.Cron = &jobs
 	}
 
 	if opts.Listening {

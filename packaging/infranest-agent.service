@@ -35,6 +35,9 @@ PrivateTmp=yes
 ProtectProc=default
 ProcSubset=all
 ReadWritePaths=/var/lib/infranest-agent
+# The job reports folder (InfraNest #5801): read and emptied on each push. `-` because a unit written before the
+# installer created it must still start.
+ReadWritePaths=-/var/spool/infranest-agent
 
 # It cannot touch the kernel, and cannot load anything.
 ProtectKernelTunables=yes

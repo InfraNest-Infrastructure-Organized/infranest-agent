@@ -60,6 +60,19 @@ type Config struct {
 	// program name. `INFRANEST_LISTENING=0` turns it off.
 	Listening bool
 
+	// Cron lists what cron runs here (InfraNest #5801) and defaults to **on**: it reads /etc/crontab, /etc/cron.d and
+	// the run-parts folders, which any user may read, and sends a job's program name — the command only when
+	// ProcessArgs is on. `INFRANEST_CRON=0` turns it off.
+	Cron bool
+
+	// JobOutput lets a failed job's last lines be sent (InfraNest #5801) and defaults to **on**. `INFRANEST_JOB_OUTPUT=0`
+	// turns it off for the whole server: the service then sends only how each run ended, whatever a cron line says.
+	JobOutput bool
+
+	// JobsDir is where `infranest-agent run --job` leaves its reports (InfraNest #5801), read and emptied on every
+	// push. `INFRANEST_JOBS_DIR`, for a sender that is not installed the usual way; the wrapper reads the same variable.
+	JobsDir string
+
 	// StateDir holds the spool and the last-run record. Everything in it is disposable: losing it costs
 	// undelivered readings and nothing else.
 	StateDir string
@@ -85,6 +98,9 @@ func Load(getenv func(string) string) (Config, error) {
 		Services:    !falsey(getenv("INFRANEST_SERVICES")),
 		Renewers:    !falsey(getenv("INFRANEST_RENEWERS")),
 		Listening:   !falsey(getenv("INFRANEST_LISTENING")),
+		Cron:        !falsey(getenv("INFRANEST_CRON")),
+		JobOutput:   !falsey(getenv("INFRANEST_JOB_OUTPUT")),
+		JobsDir:     strings.TrimSpace(getenv("INFRANEST_JOBS_DIR")),
 		ProcessArgs: truthy(getenv("INFRANEST_PROCESS_ARGS")),
 	}
 

@@ -73,6 +73,11 @@ type Sample struct {
 	// not read /proc/net/tcp, or the platform has none (Windows); `ports: []` is "nothing listens".
 	Listening *Listening `json:"listening,omitempty"`
 
+	// What cron runs on this machine (InfraNest #5801): /etc/crontab, /etc/cron.d and the run-parts folders. A snapshot
+	// like `services`: nil when the collector is off or the platform has no cron, a pointer to an empty list when it
+	// looked and found none — which must reach the receiver as `[]`, so a job that was removed is cleared there.
+	Cron *[]CronJob `json:"cron,omitempty"`
+
 	AgentVersion string `json:"agent_version,omitempty"`
 
 	// Collectors that failed, by name, with the reason. Reported rather than hidden: a collector that

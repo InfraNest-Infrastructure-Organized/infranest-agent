@@ -14,6 +14,8 @@ REPO="InfraNest-Infrastructure-Organized/infranest-agent"
 BIN_DIR="/usr/local/bin"
 CONF_DIR="/etc/infranest"
 STATE_DIR="/var/lib/infranest-agent"
+# Where `infranest-agent run --job` leaves its reports for the agent (InfraNest #5801).
+JOBS_DIR="/var/spool/infranest-agent"
 USER_NAME="infranest-agent"
 SERVICE="infranest-agent"
 
@@ -55,7 +57,8 @@ Options:
   --uninstall            remove the agent, its user, its config and its data
   --help                 show this
 
-The agent only sends. It takes no instructions, runs no commands, and opens no ports.
+The agent only sends data. It can't be given instructions, opens no ports, and never runs anything by
+itself. The one exception is 'infranest-agent run', which you can put in front of your own cron job.
 USAGE
 }
 
@@ -281,7 +284,7 @@ if [ "$DO_UNINSTALL" -eq 1 ]; then
     rm -rf "/etc/sv/${SERVICE}"
   fi
   rm -f "${BIN_DIR}/infranest-agent"
-  rm -rf "$CONF_DIR" "$STATE_DIR"
+  rm -rf "$CONF_DIR" "$STATE_DIR" "$JOBS_DIR"
   if id "$USER_NAME" >/dev/null 2>&1; then
     userdel "$USER_NAME" 2>/dev/null || deluser "$USER_NAME" 2>/dev/null || true
   fi
@@ -386,6 +389,12 @@ install -m 0755 "$tmp/infranest-agent" "${BIN_DIR}/infranest-agent"
 mkdir -p "$CONF_DIR" "$STATE_DIR"
 chown "$USER_NAME":"$USER_NAME" "$STATE_DIR"
 chmod 0750 "$STATE_DIR"
+
+# The folder `infranest-agent run --job` reports into (InfraNest #5801), on an upgrade too: any user's cron job may
+# add a file, nobody but the agent may list or read one, and the sticky bit stops anyone removing another's.
+mkdir -p "$JOBS_DIR"
+chown "$USER_NAME":"$USER_NAME" "$JOBS_DIR"
+chmod 1733 "$JOBS_DIR"
 
 # The token goes in a file the agent user can read and nobody else can — never into the unit file, which
 # `systemctl show` prints to any local user.
@@ -506,6 +515,9 @@ PrivateTmp=yes
 ProtectProc=default
 ProcSubset=all
 ReadWritePaths=/var/lib/infranest-agent
+# The job reports folder (InfraNest #5801): read and emptied on each push. `-` because a unit written before the
+# installer created it must still start.
+ReadWritePaths=-/var/spool/infranest-agent
 
 # It cannot touch the kernel, and cannot load anything.
 ProtectKernelTunables=yes

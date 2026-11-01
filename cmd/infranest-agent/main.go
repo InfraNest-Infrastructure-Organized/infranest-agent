@@ -22,6 +22,8 @@ import (
 	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/agent"
 	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/collect"
 	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/config"
+	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/jobrun"
+	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/jobs"
 	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/push"
 	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/spool"
 )
@@ -35,6 +37,12 @@ var (
 )
 
 func main() {
+	// The job wrapper (InfraNest #5801) leaves with its command's exit code, so it is answered before anything else
+	// — and never by the service, which is started as a bare `run`.
+	if args := os.Args[1:]; len(args) > 0 && args[0] == "run" && jobrun.Wants(args[1:]) {
+		os.Exit(jobrun.Main(args[1:], os.Stdin, os.Stdout, os.Stderr, jobs.Dir(os.Getenv("INFRANEST_JOBS_DIR"))))
+	}
+
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "infranest-agent:", err)
 		os.Exit(1)
@@ -101,6 +109,8 @@ func run(args []string, stdout, stderr *os.File) error {
 			Containers: collect.NewContainerTracker(),
 			// And which package each process belongs to (InfraNest #5665).
 			Packages: collect.NewPackageIndex(),
+			// And what cron runs here (InfraNest #5801).
+			Cron: collect.NewCronReader(),
 		})
 	case "run":
 		return runAgent(stdout, stderr, environment(*configPath))
@@ -264,7 +274,7 @@ this machine:
 	fmt.Fprintln(w, "  sudo rm -f /etc/systemd/system/infranest-agent.service")
 	fmt.Fprintln(w, "  sudo systemctl daemon-reload")
 	fmt.Fprintf(w, "  sudo rm -f %s\n", binary)
-	fmt.Fprintf(w, "  sudo rm -rf %s %s\n", filepath.Dir(confPath), stateDir)
+	fmt.Fprintf(w, "  sudo rm -rf %s %s %s\n", filepath.Dir(confPath), stateDir, jobs.Dir(cfg.JobsDir))
 	fmt.Fprintln(w, "  sudo userdel infranest-agent")
 	fmt.Fprint(w, `
 Or, if you still have the installer:
@@ -289,6 +299,9 @@ Usage:
 Commands:
   print       run one collection cycle and write what would be sent to stdout, sending nothing
   run         collect continuously and send — this is what the service runs
+  run --job NAME [--no-output] -- COMMAND …
+              run COMMAND as you would anyway and report when it ran and how it
+              ended, through the agent — put it in front of a cron line
   status      whether readings are being delivered, and if not, why not
   uninstall   print the exact commands that remove this installation
   flare       a redacted bundle for a support ticket — no token in it
@@ -308,6 +321,7 @@ Configuration (from the environment; systemd reads /etc/infranest/agent.conf):
   INFRANEST_PROCESSES    collect the busiest processes
   INFRANEST_PROCESS_ARGS include command lines — these often contain credentials
   INFRANEST_SERVICES     watch systemd units and report the failed ones (default on)
+  INFRANEST_CRON         list the jobs in /etc/crontab and /etc/cron.d (default on)
 
 A reading that cannot be delivered is kept on disk and sent when the connection comes
 back, so a network problem costs nothing but the delay.
