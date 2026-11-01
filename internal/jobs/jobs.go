@@ -248,10 +248,17 @@ func Remove(waiting []Waiting) {
 }
 
 // Reports is the reports alone, for the push.
-func Reports(waiting []Waiting) []Report {
+func Reports(waiting []Waiting, withOutput bool) []Report {
 	out := make([]Report, 0, len(waiting))
 	for _, w := range waiting {
-		out = append(out, w.Report)
+		r := w.Report
+		// The server's own setting wins over the cron line (InfraNest #5801): with INFRANEST_JOB_OUTPUT=0 no
+		// job's output leaves the machine, whatever the wrapper was told.
+		if !withOutput && len(r.Output) > 0 {
+			r.Output = nil
+			r.OutputWithheld = true
+		}
+		out = append(out, r)
 	}
 
 	return out

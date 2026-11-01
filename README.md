@@ -529,7 +529,9 @@ run — when it started, when it ended, how long it took and its exit code:
 - No token goes in your crontab. It leaves a small report in `/var/spool/infranest-agent`, and the agent sends it
   on its next push and deletes it. A report the agent could not send is kept for a week.
 - **When the command fails**, the report carries its last 20 lines of output, with anything shaped like a
-  password, token or key masked. `--no-output` sends the exit code alone.
+  password, token or key masked. `--no-output` sends the exit code alone, and `INFRANEST_JOB_OUTPUT=0` in the
+  agent's own configuration sends no job's output at all, whatever a cron line says.
+- It runs only as whoever started it: should the binary ever be made set-user-ID or set-group-ID, it refuses.
 - Who ran it is read from the report file's owner, never from the report: the folder is writable by anyone.
 - The agent still only reads your crontab. It never changes it.
 

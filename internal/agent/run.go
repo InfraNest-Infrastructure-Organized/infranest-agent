@@ -355,7 +355,7 @@ func (r *Runner) sendOnce(ctx context.Context, url *string, state *State) error 
 	r.jobsFolder = jobsErr == nil && jobs.Dir(r.Config.JobsDir) != ""
 	var jobRuns any
 	if len(waiting) > 0 {
-		jobRuns = jobs.Reports(waiting)
+		jobRuns = jobs.Reports(waiting, r.Config.JobOutput)
 	}
 
 	// What this agent is configured to collect, sent every push rather than once at install: the config

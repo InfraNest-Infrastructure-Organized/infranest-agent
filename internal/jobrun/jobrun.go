@@ -106,6 +106,14 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer, dir string) 
 		return 2
 	}
 
+	// Never with borrowed rights: should the binary ever be made set-user-ID or set-group-ID, it would run
+	// somebody else's command as the binary's owner. It runs only as whoever started it (InfraNest #5801).
+	if os.Geteuid() != os.Getuid() || os.Getegid() != os.Getgid() {
+		fmt.Fprintln(stderr, "infranest-agent run: refusing to run with set-user-ID or set-group-ID rights")
+
+		return 126
+	}
+
 	report, code := Run(opts, stdin, stdout, stderr, time.Now)
 	if err := jobs.Write(dir, report); err != nil {
 		// Said, and nothing else: the job's own result is what cron and anyone reading its mail act on.

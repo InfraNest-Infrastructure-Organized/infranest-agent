@@ -261,3 +261,15 @@ func TestListeningIsOnUnlessTurnedOff(t *testing.T) {
 		t.Fatalf("expected INFRANEST_LISTENING=0 to turn it off, got %v %v", c.Listening, err)
 	}
 }
+
+// A failed job's last lines are sent unless the server says otherwise (InfraNest #5801).
+func TestJobOutputIsOnUnlessTheServerSaysNo(t *testing.T) {
+	c, err := Load(env(map[string]string{"INFRANEST_TOKEN": "sat_x"}))
+	if err != nil || !c.JobOutput {
+		t.Fatalf("expected job output on by default, got %v %v", c.JobOutput, err)
+	}
+	c, err = Load(env(map[string]string{"INFRANEST_TOKEN": "sat_x", "INFRANEST_JOB_OUTPUT": "0"}))
+	if err != nil || c.JobOutput {
+		t.Fatalf("expected INFRANEST_JOB_OUTPUT=0 to turn it off, got %v %v", c.JobOutput, err)
+	}
+}

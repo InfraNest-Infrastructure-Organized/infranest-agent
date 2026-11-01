@@ -125,3 +125,19 @@ func TestReportsAreClippedToTheContract(t *testing.T) {
 		t.Fatalf("clipped: job %d, lines %d, line %d", len(c.Job), len(c.Output), len(c.Output[0]))
 	}
 }
+
+// INFRANEST_JOB_OUTPUT=0 is the server's own word (InfraNest #5801): no job's output leaves, whatever the wrapper sent.
+func TestTheServersSettingWithholdsEveryJobsOutput(t *testing.T) {
+	waiting := []Waiting{{Report: Report{ID: "a", Job: "backup", ExitCode: 1, Output: []string{"dumping…", "failed"}}}}
+
+	if got := Reports(waiting, true); len(got[0].Output) != 2 || got[0].OutputWithheld {
+		t.Fatalf("with output on, the lines go: %+v", got[0])
+	}
+	got := Reports(waiting, false)
+	if got[0].Output != nil || !got[0].OutputWithheld || got[0].ExitCode != 1 {
+		t.Fatalf("with output off, only how it ended goes: %+v", got[0])
+	}
+	if len(waiting[0].Report.Output) != 2 {
+		t.Fatal("the report on disk is not changed")
+	}
+}

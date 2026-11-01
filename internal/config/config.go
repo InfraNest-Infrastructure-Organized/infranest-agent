@@ -65,6 +65,10 @@ type Config struct {
 	// ProcessArgs is on. `INFRANEST_CRON=0` turns it off.
 	Cron bool
 
+	// JobOutput lets a failed job's last lines be sent (InfraNest #5801) and defaults to **on**. `INFRANEST_JOB_OUTPUT=0`
+	// turns it off for the whole server: the service then sends only how each run ended, whatever a cron line says.
+	JobOutput bool
+
 	// JobsDir is where `infranest-agent run --job` leaves its reports (InfraNest #5801), read and emptied on every
 	// push. `INFRANEST_JOBS_DIR`, for a sender that is not installed the usual way; the wrapper reads the same variable.
 	JobsDir string
@@ -95,6 +99,7 @@ func Load(getenv func(string) string) (Config, error) {
 		Renewers:    !falsey(getenv("INFRANEST_RENEWERS")),
 		Listening:   !falsey(getenv("INFRANEST_LISTENING")),
 		Cron:        !falsey(getenv("INFRANEST_CRON")),
+		JobOutput:   !falsey(getenv("INFRANEST_JOB_OUTPUT")),
 		JobsDir:     strings.TrimSpace(getenv("INFRANEST_JOBS_DIR")),
 		ProcessArgs: truthy(getenv("INFRANEST_PROCESS_ARGS")),
 	}
