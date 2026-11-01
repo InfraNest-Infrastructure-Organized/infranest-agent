@@ -243,6 +243,8 @@ func FuzzOpen(f *testing.F) {
 	for _, layout := range layouts {
 		f.Add(fixture(f, layout))
 	}
+	// Auth and authpriv lines, so the failed-login classifier is fuzzed along with the reader (InfraNest #5868).
+	f.Add(fixture(f, "authfail"))
 	f.Fuzz(func(t *testing.T, b []byte) {
 		file, err := Open(bytes.NewReader(b), int64(len(b)))
 		if err != nil {
@@ -251,6 +253,7 @@ func FuzzOpen(f *testing.F) {
 		files := []*openFile{{File: file, closer: nopCloser{}}}
 		lastLines(files, "nginx.service", time.Time{}, at(23, 0))
 		countHour(files, at(10, 0))
+		countHour(files, at(14, 0))
 	})
 }
 
