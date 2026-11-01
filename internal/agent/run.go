@@ -14,6 +14,7 @@ import (
 	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/collect"
 	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/config"
 	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/jobs"
+	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/journal"
 	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/push"
 	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/spool"
 )
@@ -50,7 +51,7 @@ const maxServerInterval = time.Hour
 // Sender is what Run pushes through. An interface so the loop can be tested without a network, which is
 // the only way its retry and backoff behaviour is testable at all.
 type Sender interface {
-	Send(ctx context.Context, url string, samples []json.RawMessage, failed map[string]string, usage any, jobRuns any, collectors push.Collectors) (push.Result, error)
+	Send(ctx context.Context, url string, samples []json.RawMessage, failed map[string]string, usage any, jobRuns any, journal any, collectors push.Collectors) (push.Result, error)
 }
 
 type Runner struct {
@@ -68,6 +69,12 @@ type Runner struct {
 	// ScanUsage is injected for the same reason as Collect: the *scheduling* of the walk is what this
 	// package owns, and it should be testable without a filesystem to walk.
 	ScanUsage func(context.Context, string) collect.UsageScan
+
+	// The system journal (InfraNest #5848), injected so the loop's part — what is told once, what waits for a push —
+	// is testable without a journal on the machine running the tests. Left nil they read the real one, on Linux only.
+	JournalCheck func() journal.Status
+	JournalLines func(unit string, since, until time.Time) journal.Snippet
+	JournalCount func(hour time.Time) journal.Hour
 
 	// Now and After are injected so the loop's timing is testable. Left nil they are the real ones.
 	Now   func() time.Time
@@ -88,6 +95,8 @@ type Runner struct {
 	cron *collect.CronReader
 	// How the machine is set up (InfraNest #5815), cached until a file changes. Made on first use by setupReader.
 	setup *collect.SetupReader
+	// What the journal watch remembers between collections (InfraNest #5848). Made on first use by journalWatcher.
+	journal *journalWatch
 	// Whether the job reports folder could be read on the last push, for `collectors.job_reports`.
 	jobsFolder bool
 
@@ -255,6 +264,8 @@ func (r *Runner) collectOnce(seq int64, state *State) {
 	// that cannot reach us this is the only place either is visible.
 	state.CollectorErrors = sample.Failed
 	r.lastMounts = sample.Mounts
+	// A unit that just failed, or started restarting in a loop: its last lines from the journal, for the next push.
+	r.observeJournal(sample.Services)
 
 	if err := r.Spool.Add(seq, sample); err != nil {
 		r.logf("could not spool the reading: %v", err)
@@ -373,9 +384,12 @@ func (r *Runner) sendOnce(ctx context.Context, url *string, state *State) error 
 		jobRuns = jobs.Reports(waiting, r.Config.JobOutput)
 	}
 
+	// Whether the system journal is read here, and what it said since the last push (InfraNest #5848).
+	journalPart := r.journalForPush()
+
 	// What this agent is configured to collect, sent every push rather than once at install: the config
 	// can be edited and the agent restarted, and nothing else would tell the server that happened.
-	result, err := r.Sender.Send(ctx, *url, samples, nil, usage, jobRuns, push.Collectors{
+	result, err := r.Sender.Send(ctx, *url, samples, nil, usage, jobRuns, journalPart, push.Collectors{
 		Processes:   r.Config.Processes,
 		ProcessArgs: r.Config.ProcessArgs,
 		// Only where there is a systemd to ask (#3836): on OpenRC or runit it is not switched on, it is absent.
@@ -427,6 +441,8 @@ func (r *Runner) sendOnce(ctx context.Context, url *string, state *State) error 
 	r.pendingUsage = nil
 	// The same for the job reports: taken, so gone from the folder.
 	jobs.Remove(waiting)
+	// And the journal's lines and counts: told.
+	r.journalDelivered()
 
 	// Only now. A reading is deleted when the server has said it stored it — never when the request
 	// merely completed, because a 502 from something in front of us completes too.

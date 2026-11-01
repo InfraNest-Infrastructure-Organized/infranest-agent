@@ -273,3 +273,15 @@ func TestJobOutputIsOnUnlessTheServerSaysNo(t *testing.T) {
 		t.Fatalf("expected INFRANEST_JOB_OUTPUT=0 to turn it off, got %v %v", c.JobOutput, err)
 	}
 }
+
+// The journal is read when the machine's owner has let the agent's user read it, unless INFRANEST_JOURNAL=0 (InfraNest #5848).
+func TestJournalIsOnUnlessSwitchedOff(t *testing.T) {
+	c, err := Load(env(map[string]string{"INFRANEST_TOKEN": "sat_x"}))
+	if err != nil || !c.Journal {
+		t.Fatalf("expected the journal on by default, got %v %v", c.Journal, err)
+	}
+	c, err = Load(env(map[string]string{"INFRANEST_TOKEN": "sat_x", "INFRANEST_JOURNAL": "0"}))
+	if err != nil || c.Journal {
+		t.Fatalf("expected INFRANEST_JOURNAL=0 to turn it off, got %v %v", c.Journal, err)
+	}
+}

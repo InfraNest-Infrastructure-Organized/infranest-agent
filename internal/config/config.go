@@ -69,6 +69,12 @@ type Config struct {
 	// turns it off for the whole server: the service then sends only how each run ended, whatever a cron line says.
 	JobOutput bool
 
+	// Journal lets a failed unit's last lines, and each unit's hourly error and warning counts, be read from the system
+	// journal (InfraNest #5848). Defaults to **on**, and does nothing until the machine's owner opts in: the journal
+	// files are readable only by the `systemd-journal` group, which the agent's user is not in unless somebody adds it.
+	// `INFRANEST_JOURNAL=0` keeps it off even then. Linux only.
+	Journal bool
+
 	// JobsDir is where `infranest-agent run --job` leaves its reports (InfraNest #5801), read and emptied on every
 	// push. `INFRANEST_JOBS_DIR`, for a sender that is not installed the usual way; the wrapper reads the same variable.
 	JobsDir string
@@ -100,6 +106,7 @@ func Load(getenv func(string) string) (Config, error) {
 		Listening:   !falsey(getenv("INFRANEST_LISTENING")),
 		Cron:        !falsey(getenv("INFRANEST_CRON")),
 		JobOutput:   !falsey(getenv("INFRANEST_JOB_OUTPUT")),
+		Journal:     !falsey(getenv("INFRANEST_JOURNAL")),
 		JobsDir:     strings.TrimSpace(getenv("INFRANEST_JOBS_DIR")),
 		ProcessArgs: truthy(getenv("INFRANEST_PROCESS_ARGS")),
 	}

@@ -16,6 +16,9 @@ RestartSec=15s
 # thing to ask anyone to install.
 User=infranest-agent
 Group=infranest-agent
+# The system journal is not readable by this user (InfraNest #5848). The machine's owner may let it read that — and only
+# that — with `usermod -aG systemd-journal infranest-agent` and a restart. Deliberately no SupplementaryGroups= here:
+# an install never grants it.
 
 # It cannot gain privilege, hold a capability, or become anything else.
 NoNewPrivileges=yes
