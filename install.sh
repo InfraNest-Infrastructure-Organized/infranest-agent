@@ -59,6 +59,14 @@ Options:
 
 The agent only sends data. It can't be given instructions, opens no ports, and never runs anything by
 itself. The one exception is 'infranest-agent run', which you can put in front of your own cron job.
+
+The download is checked against its sha256, and — when gh or cosign is installed — against the release's
+build attestation. To check a release yourself first, with cosign:
+
+  cosign verify-blob-attestation --bundle infranest-agent.sigstore.json --new-bundle-format \
+    --type slsaprovenance1 --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    --certificate-identity-regexp '^https://github\.com/InfraNest-Infrastructure-Organized/infranest-agent/\.github/workflows/release\.yml@refs/tags/v' \
+    infranest-agent_linux_amd64
 USAGE
 }
 
@@ -511,6 +519,13 @@ LockPersonality=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
+# No device nodes but the pseudo-devices (/dev/null, /dev/urandom): it reads disks' statistics from /proc and /sys,
+# never a disk itself.
+PrivateDevices=yes
+# What it writes — its state, its spool — is readable by itself and root only.
+UMask=0077
+# It cannot leave System V IPC objects behind (it creates none).
+RemoveIPC=yes
 # ProtectProc is deliberately NOT `invisible`. That hides other users' /proc entries from this process,
 # which would leave the process collector able to see only the agent itself — a feature quietly reduced to
 # nothing by a hardening directive that looks obviously correct. `default` keeps the kernel's own rules,
@@ -562,6 +577,10 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=yes
 RestrictRealtime=yes
 SystemCallFilter=@system-service
+# And of those, nothing privileged (chown, setuid, swapon, clock, raw I/O…) and nothing that changes a scheduling
+# priority or a resource limit (nice, setrlimit, sched_setaffinity…) — all of which it would need privilege for anyway.
+# A call outside the filter kills the process, which is how CI's sandbox job notices a collector that makes one.
+SystemCallFilter=~@privileged @resources
 SystemCallArchitectures=native
 MemoryDenyWriteExecute=yes
 

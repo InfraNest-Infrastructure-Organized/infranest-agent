@@ -187,6 +187,14 @@ gh attestation verify infranest-agent_linux_amd64 \
   --signer-workflow InfraNest-Infrastructure-Organized/infranest-agent/.github/workflows/release.yml \
   --bundle infranest-agent.sigstore.json
 
+# The same check with cosign instead of gh (cosign 2.4 or later; 3.x prints a deprecation note for
+# --new-bundle-format and verifies all the same). verify-blob-attestation, not verify-blob: the bundle is a
+# signed statement *about* the binary (SLSA build provenance), not a signature over its bytes.
+cosign verify-blob-attestation --bundle infranest-agent.sigstore.json --new-bundle-format \
+  --type slsaprovenance1 --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/InfraNest-Infrastructure-Organized/infranest-agent/\.github/workflows/release\.yml@refs/tags/v' \
+  infranest-agent_linux_amd64
+
 # What it is. Clone the tag, build it, compare the hash to SHA256SUMS.
 # This one needs no trust in us at all.
 CGO_ENABLED=0 go build -trimpath -o /tmp/infranest-agent ./cmd/infranest-agent
@@ -424,17 +432,32 @@ namespace: a container with its own namespace has its own tables, so a port Dock
 when something on the host listens for it (`docker-proxy` does; Docker with the userland proxy turned off
 does not).
 
+#### The sandbox — verify it yourself
+
+The unit ([`packaging/infranest-agent.service`](packaging/infranest-agent.service), which `install.sh` writes
+verbatim — CI fails if the two differ) runs the agent as its own user with no capability, no way to gain one, a
+read-only view of the system, no home directories, no devices, no kernel tunables or modules, no new namespaces, a
+syscall allow-list with the privileged and resource-changing calls taken out, and only IP and unix sockets. Ask
+systemd how exposed that leaves it:
+
 ```
-User=infranest-agent
-NoNewPrivileges=yes
-CapabilityBoundingSet=
-ProtectSystem=strict
-ProtectHome=yes
-PrivateTmp=yes
-RestrictAddressFamilies=AF_INET AF_INET6
-MemoryMax=64M
-CPUQuota=5%
+systemd-analyze security infranest-agent
 ```
+
+On Ubuntu 24.04 (systemd 255) that reads **1.4 OK** — 0 is a unit that can do nothing, 10 one with no
+restrictions at all, and a stock service with none of these settings scores 9.6. CI runs the same command on every
+change and fails if the number rises. What is left, and why each stays:
+
+| Still flagged | Why it stays |
+|---|---|
+| `PrivateNetwork`, `IPAddressDeny`, `RestrictAddressFamilies=~AF_INET/AF_INET6` | It has to send its readings. The address it sends to is configurable, so there is no fixed allow-list to pin |
+| `RestrictAddressFamilies=~AF_UNIX` | The only way to ask systemd which units have failed is its D-Bus socket (read-only: see the unit's comment) |
+| `ProtectProc`, `ProcSubset` | Listing the busiest processes, and reading memory, CPU and network counters, *is* reading `/proc`. `ProtectProc=invisible` would leave it seeing only itself |
+| `PrivateUsers` | It would map every other user to `nobody`, so neither process owners nor the `systemd-journal` opt-in would work |
+| `DeviceAllow` (`char-rtc:r`) | Added by `ProtectClock=yes` itself, so the clock can be read and not set |
+| `RootDirectory` | The agent reads the host's own files; a separate root would show it nothing |
+
+The limits are set in the unit too: `MemoryMax=64M`, `CPUQuota=5%`, `TasksMax=32`.
 
 The token lives in `/etc/infranest/agent.conf`, mode 0600, loaded with `EnvironmentFile=` — never
 `Environment=` in the unit, which `systemctl show` exposes to any local user. On Windows the same file
