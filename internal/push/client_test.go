@@ -28,7 +28,7 @@ func send(t *testing.T, handler http.HandlerFunc, samples ...string) (Result, er
 	c.HTTP = srv.Client()
 	c.HTTP.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
-	return c.Send(context.Background(), srv.URL, raw, nil, nil, Collectors{})
+	return c.Send(context.Background(), srv.URL, raw, nil, nil, nil, Collectors{})
 }
 
 func TestTheBodyIsAlwaysABatch(t *testing.T) {
@@ -174,7 +174,7 @@ func TestAScanRidesAlongOnThePushAfterIt(t *testing.T) {
 	c.HTTP = srv.Client()
 
 	scan := map[string]any{"mount_point": "/var", "dirs": []any{}}
-	if _, err := c.Send(context.Background(), srv.URL, []json.RawMessage{json.RawMessage(`{"cpu_percent":1}`)}, nil, scan, Collectors{}); err != nil {
+	if _, err := c.Send(context.Background(), srv.URL, []json.RawMessage{json.RawMessage(`{"cpu_percent":1}`)}, nil, scan, nil, Collectors{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -232,7 +232,7 @@ func TestThePayloadSaysWhichCollectorsAreOn(t *testing.T) {
 
 	c := New("sat_x", "v0.8.0")
 	_, err := c.Send(context.Background(), srv.URL, []json.RawMessage{json.RawMessage(`{"cpu_percent":1}`)},
-		nil, nil, Collectors{Processes: false, ProcessArgs: false, Services: true})
+		nil, nil, nil, Collectors{Processes: false, ProcessArgs: false, Services: true})
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}

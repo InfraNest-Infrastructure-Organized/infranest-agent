@@ -34,6 +34,12 @@ type Collectors struct {
 	Services    bool `json:"services"`
 	Renewers    bool `json:"renewers"`
 	Listening   bool `json:"listening"`
+	// Cron (InfraNest #5801): whether /etc/crontab and /etc/cron.d are read — false where it is switched off or
+	// there is no cron to read.
+	Cron bool `json:"cron"`
+	// JobReports: whether the folder `infranest-agent run --job` reports into exists here. False until the
+	// installer has created it, which is what tells somebody their wrapped jobs are not arriving yet.
+	JobReports bool `json:"job_reports"`
 }
 
 // Result is what one push accomplished.
@@ -125,10 +131,10 @@ func New(token, version string) *Client {
 }
 
 // Send posts a batch of readings and reports what the server did with them.
-func (c *Client) Send(ctx context.Context, url string, samples []json.RawMessage, failed map[string]string, usage any, collectors Collectors) (Result, error) {
+func (c *Client) Send(ctx context.Context, url string, samples []json.RawMessage, failed map[string]string, usage any, jobRuns any, collectors Collectors) (Result, error) {
 	var result Result
 
-	body, err := encode(samples, failed, c.Version, usage, collectors)
+	body, err := encode(samples, failed, c.Version, usage, jobRuns, collectors)
 	if err != nil {
 		return result, err
 	}
@@ -206,7 +212,7 @@ func (c *Client) Send(ctx context.Context, url string, samples []json.RawMessage
 // `samples` are already-marshalled readings straight from the spool, so a reading is written once when it
 // is collected and never re-encoded — which is also what keeps a reading that was collected by an older
 // version of the agent sendable by a newer one.
-func encode(samples []json.RawMessage, failed map[string]string, version string, usage any, collectors Collectors) ([]byte, error) {
+func encode(samples []json.RawMessage, failed map[string]string, version string, usage any, jobRuns any, collectors Collectors) ([]byte, error) {
 	payload := struct {
 		Samples      []json.RawMessage `json:"samples"`
 		Failed       map[string]string `json:"failed,omitempty"`
@@ -219,7 +225,10 @@ func encode(samples []json.RawMessage, failed map[string]string, version string,
 		// single payload would be a second thing to get wrong. Omitted entirely on the pushes between
 		// scans, which is nearly all of them.
 		DiskUsage any `json:"disk_usage,omitempty"`
-	}{Samples: samples, Failed: failed, AgentVersion: version, Collectors: collectors, DiskUsage: usage}
+		// What `infranest-agent run --job` reported since the last push (InfraNest #5801). Events, not a snapshot:
+		// each is sent until a push carrying it is answered, then deleted, and InfraNest keeps one per ID.
+		JobRuns any `json:"job_runs,omitempty"`
+	}{Samples: samples, Failed: failed, AgentVersion: version, Collectors: collectors, DiskUsage: usage, JobRuns: jobRuns}
 
 	body, err := json.Marshal(payload)
 	if err != nil {

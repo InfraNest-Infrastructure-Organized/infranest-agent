@@ -64,6 +64,9 @@ type Options struct {
 	KnownPeers map[netip.Addr]struct{}
 	// Accepted and ignored: the package database read is dpkg's, which Windows does not have (InfraNest #5665).
 	Packages *PackageIndex
+	// Cron reads the cron definitions any user can read (InfraNest #5801), cached until a file changes. Skipped when
+	// nil, and read on Linux only.
+	Cron *CronReader
 }
 
 // Collect takes one reading on Windows.

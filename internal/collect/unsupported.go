@@ -23,6 +23,9 @@ type Options struct {
 	Listening    bool
 	KnownPeers   map[netip.Addr]struct{}
 	Packages     *PackageIndex
+	// Cron reads the cron definitions any user can read (InfraNest #5801), cached until a file changes. Skipped when
+	// nil, and read on Linux only.
+	Cron *CronReader
 }
 
 // Collect reports honestly that this platform is not implemented rather than returning zeros.

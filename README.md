@@ -27,6 +27,11 @@ It takes no instructions, executes nothing, and opens no ports: there is no list
 command channel. CI checks that mechanically on every commit — see
 [the invariant job](.github/workflows/ci.yml).
 
+One command starts a process, and it is not the service: [`infranest-agent run --job`](#watching-a-cron-job),
+which you put in front of your own cron command so InfraNest hears whether the job worked. It runs that command
+and nothing else, as the user your crontab already runs it as. CI checks that nothing the service is built from
+can reach it.
+
 The one thing the server can influence is **where the next reading goes**. A reply may name a different
 ingest URL, and the agent adopts it only if it is HTTPS and on the same registrable domain — so it can be
 moved between our own hosts and cannot be pointed anywhere else by whoever manages to answer one push.
@@ -61,6 +66,7 @@ is the first thing documented rather than a debugging flag buried at the bottom.
 | **Services** | systemd units that were set up to run, which of them have failed, **why each failed**, **how many times each has been restarted**, and what each is using in memory. Watched set is "enabled, plus anything currently failed", so it works with no configuration. Read over D-Bus; nothing here can start, stop or restart a unit. The failure reason is systemd's own word for it — `oom-kill`, `timeout`, `exit-code` and the rest — and **no log output is sent**: see [what it cannot see](#what-it-cannot-see). **Which installed package each unit comes from** — the file systemd loaded it from, looked up in the same dpkg index as the processes' packages, with the package's priority, which tells the base system's own units from software somebody added — and whether a unit was written on this machine (`/etc/systemd/system` with no package owning it). The unit file is never opened and its path is not sent |
 | **Certificate renewers** | what renews this machine's certificates, and whether its last run worked: certbot's renewal configs (which certificates, which authenticator) and its systemd timer (when it last ran, how it finished, when it runs next); Caddy's and Traefik's certificate stores where they can be read. Only world-readable files — certbot's configs are; **private keys are never opened**, and Caddy's and Traefik's stores are owner-only on a stock install, so for those the agent reports that the store is there and refused it rather than reading it. `INFRANEST_RENEWERS=0` turns it off |
 | **Listening ports** | every TCP port in `LISTEN` and every bound, unconnected UDP port, read from `/proc/net/tcp`, `tcp6`, `udp` and `udp6` — which are world-readable — with the address each is bound to and whether that is every address, a specific one, or loopback only. For each TCP port, **how many distinct machines are connected, by class** (loopback, private, public). **Counts only: the addresses of whoever connects are never sent** — they are your own clients, and nothing here needs them. **No program names** either: linking a socket to its process means reading `/proc/<pid>/fd`, which an unprivileged agent can do only for itself, so the agent reports that a port listens and never guesses by whom. Lets InfraNest compare a firewall's open ports with what actually listens behind them. `INFRANEST_LISTENING=0` turns it off; not collected on Windows |
+| **Cron jobs** | what cron runs here: `/etc/crontab`, `/etc/cron.d/*` and the scripts in `/etc/cron.hourly`, `daily`, `weekly` and `monthly` — when each runs, as which user, and the name of the program it runs. **The command itself only with `INFRANEST_PROCESS_ARGS`**: cron lines are where people put passwords. Your users' own crontabs (`crontab -e`, `/var/spool/cron`) are readable by root alone and are **never opened** — the agent does not run as root. Read again only when a file changes. `INFRANEST_CRON=0` turns it off; Linux only |
 | **Containers** | Docker and Podman containers that are running, how much memory each is using, and **how often each has restarted**: a container in a restart loop is `Up` every time anyone looks. Read from the scope units systemd keeps for each container, over the same D-Bus connection as the services above — **never from the Docker socket**, which is root on the host. The cost is that containers are known by their short ID, not their name — so **what runs in each** is sent instead: the container's main process, the first one in its world-readable `cgroup.procs` (past an init shim such as tini), by its name; its command line only when command lines are switched on. And **the ports Docker publishes for it**, read from the command lines of Docker's `docker-proxy` processes, which hold nothing but addresses and port numbers: only those five flags are read, in memory, and the command line itself is never sent. With Docker's userland proxy switched off no process says which port goes where, and none is reported. Hosts on Docker's older `cgroupfs` driver have no such units and report none |
 
 A failed unit is worth its own line here because it is the failure that moves no number: a backup timer
@@ -200,7 +206,10 @@ No surprises, in this order:
 4. Creates a user called `infranest-agent` with no login and no privileges (Windows: uses the built-in
    `LOCAL SERVICE` account)
 5. Puts the token in a file only that user can read
-6. Starts it, and sets it to start again after a reboot
+6. Creates `/var/spool/infranest-agent` (mode `1733`, owned by that user), where
+   [`infranest-agent run --job`](#watching-a-cron-job) leaves its reports: anyone may add one, nobody but the
+   agent may list or read them. Linux only; an upgrade creates it too
+7. Starts it, and sets it to start again after a reboot
 
 It does not touch anything else, and it does not need to reach the internet again except to send readings.
 
@@ -453,6 +462,8 @@ All optional except the token, and all set for you by the installer.
 | `INFRANEST_SERVICES` | watch systemd units and report the ones that have failed. **On** by default — see below |
 | `INFRANEST_RENEWERS` | report what renews certificates here (certbot, Caddy, Traefik) and its last run. **On** by default |
 | `INFRANEST_LISTENING` | report listening ports and how many distinct peers are connected to each, by class — never their addresses. **On** by default |
+| `INFRANEST_CRON` | list the jobs in `/etc/crontab`, `/etc/cron.d` and the run-parts folders. **On** by default |
+| `INFRANEST_JOBS_DIR` | where `run --job` reports and the agent reads them. Default `/var/spool/infranest-agent` |
 
 `INFRANEST_URL` must be `https`. The token is a bearer credential and this is the wire it crosses; there
 is no configuration for which plaintext is the right trade, so the agent refuses to start rather than
@@ -464,6 +475,7 @@ send it in the clear.
 |---|---|
 | `infranest-agent print` | one collection cycle to stdout, sending nothing |
 | `infranest-agent run` | collect and send continuously — this is what the service runs |
+| `infranest-agent run --job NAME [--no-output] -- COMMAND …` | runs `COMMAND` as you would anyway and reports how it ended — see [Watching a cron job](#watching-a-cron-job) |
 | `infranest-agent status` | whether readings are being delivered, and if not, why not |
 | `infranest-agent flare` | a redacted bundle for a support ticket — the token is never in it |
 | `infranest-agent uninstall` | prints the exact commands that remove this installation — it cannot run them itself, because the agent starts no subprocesses |
@@ -500,6 +512,31 @@ gets pasted into tickets, chat threads and screenshots. What is included is whet
 and how long it is, because a token truncated by a copy-paste is a real failure and an invisible one.
 
 It generates even when the configuration is broken. That is one of the reasons somebody runs it.
+
+## Watching a cron job
+
+Cron does not record whether a job worked. Put the agent in front of the command and InfraNest hears about every
+run — when it started, when it ended, how long it took and its exit code:
+
+```
+# before
+15 3 * * * root /opt/acme/backup.sh
+# after
+15 3 * * * root infranest-agent run --job "Nightly backup" -- /opt/acme/backup.sh
+```
+
+- It runs your command **exactly as before**: as the same user, with the same input and output, no shell unless
+  your command is one, and it exits with your command's own exit code. Nothing gets more rights.
+- No token goes in your crontab. It leaves a small report in `/var/spool/infranest-agent`, and the agent sends it
+  on its next push and deletes it. A report the agent could not send is kept for a week.
+- **When the command fails**, the report carries its last 20 lines of output, with anything shaped like a
+  password, token or key masked. `--no-output` sends the exit code alone.
+- Who ran it is read from the report file's owner, never from the report: the folder is writable by anyone.
+- The agent still only reads your crontab. It never changes it.
+
+In InfraNest, **Watch this job** on the server's Workloads tab makes the heartbeat monitor these reports count
+as check-ins for, and gives you the line to paste. Linux only for now: on Windows the command runs and exits with
+its code, and says it cannot report.
 
 ## Where it sends
 

@@ -6,7 +6,7 @@ This is a **public contract**. The agent is one implementation of it; anyone may
 endpoint does not care which is talking to it. So this document is the specification rather than a
 description of our code, and where the two disagree the endpoint's validation is the authority.
 
-**Contract version 22** — current as of the first agent release after `v0.18.0`.
+**Contract version 23** — current as of the first agent release after `v0.19.0`.
 
 Every change so far has been *additive*, and that is the rule rather than a run of luck: a field is added,
 never repurposed, and never made required after the fact. A sender written against version 1 keeps working
@@ -16,6 +16,7 @@ long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
+| 23 | `cron[]` — what cron runs: the jobs in `/etc/crontab` and `/etc/cron.d`, and the scripts in the run-parts folders, with schedule, user, program and time zone (InfraNest #5801); `job_runs[]` alongside the samples — how each run of a job wrapped in `infranest-agent run --job` ended; `collectors.cron` and `collectors.job_reports` |
 | 22 | `services[].package` — the dpkg package that installed each unit's file, matched on the file systemd loaded the unit from, and `services[].local` — a unit written on this machine (InfraNest #5789); `priority` and `section` on every package, `processes[].package` included |
 | 21 | `processes[].package` — the dpkg package a process's executable belongs to, with its version and one-line description (InfraNest #5665); `processes[].services` and `services[].pid` — on Windows, which running services each process hosts, and the process each service runs in (#5670); `containers[].main_pid`, `main_process`, `main_command` and `ports[]` — what runs in each container, and the ports Docker publishes for it (#5710) |
 | 20 | `disks[]` — read and write throughput and the share of time busy, **per whole disk** rather than summed (InfraNest #4922); `mounts[].disks` — the whole disks each filesystem is stored on, so a mount can be joined to its disk's activity |
@@ -133,6 +134,17 @@ nothing rather than a guess.
 | `services[].pid` | int ≥1 | Windows only (contract 21): the process the service runs in while it is running, from the Service Control Manager's own answer. Joins a service to its row in `processes[]`. Absent when it is not running. The automatic-start services listed here are only some of those running; `processes[].services` names the rest |
 | `services[].package` | object | The installed package the unit's file belongs to (contract 22), in the shape of `processes[].package` with `match` set to `unit_file`: the file systemd loaded the unit from — its `FragmentPath`, one property read over the same system bus connection, for the units being sent only — is one the package lists. What names a unit that is not running, a finished one-shot or a timer, by the package that installed it. The agent indexes the `.service` and `.timer` files directly in `/lib/systemd/system`, `/usr/lib/systemd/system`, `/etc/systemd/system` and `/usr/local/lib/systemd/system` from dpkg's file lists, in the index `processes[].package` uses. An instance (`getty@tty1.service`) is matched on its template's file. **Absent when it could not be placed, which is not "none"**: a unit file no installed package lists, one a generator wrote under `/run`, a transient unit with no file, a system without dpkg. Neither the unit file's path nor the unit's bus path is sent |
 | `services[].local` | boolean | `true` when systemd loaded the unit from `/etc/systemd/system` or `/usr/local/lib/systemd/system` and no installed package owns that file — written on this machine, by an administrator or an installer script (contract 22). Absent otherwise, including when it could not be told; never `false` |
+| `cron[]` | array | Max 200. What cron runs on this machine (contract 23): every job line in `/etc/crontab` and `/etc/cron.d/*`, and every script in `/etc/cron.hourly`, `daily`, `weekly` and `monthly` — files any user may read, on Debian and Ubuntu (cron) and the RHEL family (cronie) alike. **The users' own crontabs (`crontab -e`, `/var/spool/cron`) are never read**: only root may read them, and the agent does not run as root, so a receiver must say they are not covered rather than imply there are none. A line cron would refuse, and a file cron skips (Debian's cron reads only names of letters, digits, `_` and `-`), is left out. A snapshot: absent when the collector is off or the platform has no cron, `[]` when it looked and found none |
+| `cron[].source` | string ≤255 | The file the job is defined in: `/etc/crontab`, `/etc/cron.d/<name>`, or the script itself for a run-parts folder |
+| `cron[].line` | int ≥1 | The line in `source`. Absent for a run-parts script |
+| `cron[].schedule` | string ≤64 | Five fields as written (`15 3 * * *`, `*/30 * * * mon-fri`) or a nickname (`@daily`, `@reboot`). For a run-parts script, the schedule of the line that runs its folder, or the folder's nickname when anacron runs it. Absent when nothing on the machine says when the folder runs |
+| `cron[].user` | string ≤64 | The user it runs as. `root` for a run-parts script |
+| `cron[].program` | string ≤128 | The program the line runs, by its file name — `backup.sh`, `sessionclean` — past conditions (`[ -x … ] &&`), assignments and wrappers (`nice`, `flock`, `timeout`); an interpreter is named by its script (`php /var/www/bin/report.php` is `report.php`). **Never its arguments** |
+| `cron[].command` | string ≤1024 | The whole command, without what follows an unescaped `%` (cron's input). **Only when `collectors.process_args` is on** — a cron line is where the database password goes |
+| `cron[].folder` | string ≤8 | `hourly`, `daily`, `weekly` or `monthly` for a run-parts script |
+| `cron[].anacron` | bool | The folder is run by anacron, which picks the time inside its own window: `schedule` is a period, not a time |
+| `cron[].timezone` | string ≤64 | The IANA zone `schedule` is read in: the file's `CRON_TZ`, else the machine's own (`/etc/localtime`, `/etc/timezone`). **Absent when neither says, which is not UTC** |
+| `cron[].job` | string ≤128 | The name given to `infranest-agent run --job` when the line goes through it — what joins the line to its `job_runs[]`. A name somebody chose for the job, so sent whatever `process_args` says |
 | `containers` | array, max 100 | Running containers, from systemd's `docker-<id>.scope` / `libpod-<id>.scope` units — **never the Docker socket**, which is root on the host. A snapshot like `services`: on the newest sample only. Absent when the agent could not ask systemd; `[]` means none that systemd can see, which includes every host on Docker's `cgroupfs` driver |
 | `containers[].id` | string ≤64 | The short container ID (twelve hex digits). Names live in the runtime's own state, which only root can read; `docker ps --filter id=<id>` gives the name |
 | `containers[].runtime` | string ≤32 | `docker` or `podman` |
@@ -196,9 +208,38 @@ nothing rather than a guess.
 | Field | Notes |
 |---|---|
 | `agent_version` | string ≤32. Shown in the UI, so a fleet running a version with a known bug is visible rather than something to be discovered |
-| `collectors` | object | Which optional collectors are on: `processes`, `process_args`, `services`, `renewers`, `listening`, all booleans. **Sent on every push, and never omitted when false** — the false is the answer that matters. Without it an absent `processes` array means either "switched off" or "nothing to report yet", and a receiver that guesses tells somebody their agent is misconfigured when it was installed a minute ago |
+| `collectors` | object | Which optional collectors are on: `processes`, `process_args`, `services`, `renewers`, `listening`, `cron`, all booleans — and `job_reports` (contract 23), whether the folder `run --job` reports into exists on this machine. **Sent on every push, and never omitted when false** — the false is the answer that matters. Without it an absent `processes` array means either "switched off" or "nothing to report yet", and a receiver that guesses tells somebody their agent is misconfigured when it was installed a minute ago |
 | `failed` | `{"collector": "reason"}`, max 32, reasons ≤255. Collectors that could not read what they were asked for. Reported rather than hidden — silently sending fewer fields looks identical to a machine that has less to say |
 | `disk_usage` | One mount's directory breakdown. Rides on whichever push follows the walk — see below |
+| `job_runs` | What `infranest-agent run --job` reported since the last push (contract 23) — see below. Absent when there is nothing |
+
+## `job_runs`
+
+Each run of a job somebody put behind the wrapper (contract 23):
+
+```
+15 3 * * * root infranest-agent run --job "Nightly backup" -- /opt/acme/backup.sh
+```
+
+The wrapper runs the command as the line's own user, passes its output through and exits with its code, and
+leaves a small report in `/var/spool/infranest-agent` (mode `1733`: anyone may add a file, nobody but the agent
+may list or read one). The agent sends what it finds there on its next push and deletes a report only once a push
+carrying it is answered, so a report survives an outage; one not sent within a week is dropped. **Events, not a
+snapshot**: a report is sent once more after a lost response, and the receiver keeps one per `id`.
+
+| Field | Type | Notes |
+|---|---|---|
+| `job_runs[]` | array, max 50 | The oldest first; the rest wait for the next push |
+| `job_runs[].id` | string, 32 hex | Random, chosen by the wrapper. What a report sent twice is recognised by |
+| `job_runs[].job` | string ≤128 | The `--job` name — the same as `cron[].job` on its line |
+| `job_runs[].started_at` / `ended_at` | RFC3339 | |
+| `job_runs[].duration_ms` | int ≥0 | On the monotonic clock: a clock step during the run does not change it |
+| `job_runs[].exit_code` | int 0–255 | The command's own. Killed by a signal: 128 + its number, as a shell reports it. Could not be started: 126, or 127 when not found |
+| `job_runs[].signal` | string ≤16 | The signal that ended it |
+| `job_runs[].error` | string ≤255 | Why it could not be started |
+| `job_runs[].output` | array of string ≤512, max 20 | **Only when it failed**, and never with `--no-output`: its last lines, stdout and stderr in the order they came, with anything shaped like a password, token or key replaced by `[masked]` — the rules InfraNest applies to a ticket it files, and the receiver applies them again |
+| `job_runs[].output_withheld` | bool | It failed, and `--no-output` kept its output on the machine |
+| `job_runs[].user` | string ≤64 | Who ran it: **the report file's owner, read by the agent** — never what the report says about itself, because the folder is writable by anyone. A receiver should not believe a run reported for a job on another user's line |
 
 ## `disk_usage`
 
@@ -315,7 +356,7 @@ silent everywhere else. A receiver may show a guess from a well-known port ("543
 
 ## Snapshots belong on the newest sample only
 
-`services`, `processes`, `system`, `renewers` and `listening` describe **now**, not the moment a reading was taken. The server
+`services`, `processes`, `system`, `renewers`, `listening` and `cron` describe **now**, not the moment a reading was taken. The server
 applies them from the newest sample in the batch and ignores them on every other one — deliberately,
 because applying each in turn would leave the disk card showing whichever happened to be last in the
 payload: an hour-old state presented as current.
@@ -354,6 +395,11 @@ maximum-length strings and the local mark, and a priority and section on each of
 **150,936 bytes**, a little over 4 MB for a full batch with the contract-21 figure: still inside the limit. A real
 server sends seventy-odd units with packages of a few dozen bytes each.
 
+Contract 23 adds `cron[]` to the snapshot sample — at its caps, 200 jobs each with every string at its limit, it is
+**376,200 bytes** — and `job_runs` beside the samples, at most **552,800 bytes** (50 runs of 20 maximum-length
+lines). Both together still leave a full batch well inside the limit. A real server has a dozen cron lines, and a
+report from a successful run carries no output at all.
+
 `mounts` is **not** a snapshot and must stay on every sample. It looks like one, but `worst_mount_percent`
 is derived per reading and is what a disk rule averages over its window — a backfilled sample without
 mounts is a hole in that series rather than a saving.
@@ -374,6 +420,10 @@ that mattered, a redaction pass that cannot know what a secret looks like in an 
 and a decision to put customer credentials in a database. `result` is a word from a fixed list. It says
 "killed by the OOM killer" or "start limit hit" the same way every time, so a rule can act on it, a filter
 can find it, and it can be translated — none of which prose can do.
+
+`job_runs[].output` (contract 23) is not a journal excerpt and does not change this. It is the last lines a command
+printed *to the wrapper somebody put in front of it*, held in the wrapper's memory, masked before they are written,
+and sent only when that run failed — no journal is read, and nothing runs that the line's owner did not write.
 
 A future version may attach the last lines of output at the moment a unit enters `failed`, which is bounded
 and needs no inbound channel. It still needs a journal reader, so it inherits the cost above, and it will
