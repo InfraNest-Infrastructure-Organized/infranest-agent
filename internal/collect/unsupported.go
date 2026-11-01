@@ -26,6 +26,9 @@ type Options struct {
 	// Cron reads the cron definitions any user can read (InfraNest #5801), cached until a file changes. Skipped when
 	// nil, and read on Linux only.
 	Cron *CronReader
+	// Setup is how the machine is set up (InfraNest #5815): never read on this platform. Accepted so the run loop builds
+	// one Options for every platform.
+	Setup *SetupReader
 }
 
 // Collect reports honestly that this platform is not implemented rather than returning zeros.

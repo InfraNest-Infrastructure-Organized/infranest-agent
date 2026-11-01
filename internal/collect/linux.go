@@ -54,6 +54,9 @@ type Options struct {
 	// Cron reads the cron definitions any user can read (InfraNest #5801), cached until a file changes. Skipped when
 	// nil, and read on Linux only.
 	Cron *CronReader
+	// Setup reads how the machine is set up (InfraNest #5815): sshd's configuration, the administrator groups and the
+	// automatic-update settings, from world-readable files, cached until one changes. Skipped when nil.
+	Setup *SetupReader
 }
 
 // Collect takes one reading.
@@ -142,6 +145,16 @@ func Collect(opts Options) (Sample, error) {
 				s.System = &System{}
 			}
 			s.System.TimeSynced = &synced
+		}
+	}
+
+	if opts.Setup != nil {
+		// Files any user can read; what an unreadable one could have decided is reported as unknown.
+		if setup := opts.Setup.Read("/"); setup != nil {
+			if s.System == nil {
+				s.System = &System{}
+			}
+			s.System.Setup = setup
 		}
 	}
 

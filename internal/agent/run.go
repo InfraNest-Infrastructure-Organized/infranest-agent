@@ -86,6 +86,8 @@ type Runner struct {
 	packages *collect.PackageIndex
 	// The cron definitions, cached until a file changes (InfraNest #5801). Made on first use by cronReader.
 	cron *collect.CronReader
+	// How the machine is set up (InfraNest #5815), cached until a file changes. Made on first use by setupReader.
+	setup *collect.SetupReader
 	// Whether the job reports folder could be read on the last push, for `collectors.job_reports`.
 	jobsFolder bool
 
@@ -210,6 +212,18 @@ func (r *Runner) cronReader() *collect.CronReader {
 	return r.cron
 }
 
+// setupReader is the run loop's setup reader (InfraNest #5815): nil where the platform has none (everything but Linux).
+func (r *Runner) setupReader() *collect.SetupReader {
+	if !collect.SetupAvailable() {
+		return nil
+	}
+	if r.setup == nil {
+		r.setup = collect.NewSetupReader()
+	}
+
+	return r.setup
+}
+
 // collectOnce takes one reading and spools it. Never returns an error: a collector that failed is
 // recorded in the reading itself, and a spool that cannot be written is logged rather than fatal —
 // stopping the agent because one write failed would turn a full disk into a monitoring outage, at
@@ -228,6 +242,7 @@ func (r *Runner) collectOnce(seq int64, state *State) {
 		KnownPeers:   r.knownPeers,
 		Packages:     r.packageIndex(),
 		Cron:         r.cronReader(),
+		Setup:        r.setupReader(),
 	})
 	if err != nil {
 		r.logf("collection failed: %v", err)

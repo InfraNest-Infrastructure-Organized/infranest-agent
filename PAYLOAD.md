@@ -6,7 +6,7 @@ This is a **public contract**. The agent is one implementation of it; anyone may
 endpoint does not care which is talking to it. So this document is the specification rather than a
 description of our code, and where the two disagree the endpoint's validation is the authority.
 
-**Contract version 23** — current as of the first agent release after `v0.19.0`.
+**Contract version 24** — current as of the first agent release after `v0.20.1`.
 
 Every change so far has been *additive*, and that is the rule rather than a run of luck: a field is added,
 never repurposed, and never made required after the fact. A sender written against version 1 keeps working
@@ -16,6 +16,7 @@ long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
+| 24 | `system.setup` — how the machine itself is set up, from world-readable files only (InfraNest #5815): sshd's effective global login settings with the file and line that decided each, the members of the `sudo`, `wheel` and `admin` groups, and where automatic updates are switched on or off. Linux only; Windows sends nothing new |
 | 23 | `cron[]` — what cron runs: the jobs in `/etc/crontab` and `/etc/cron.d`, and the scripts in the run-parts folders, with schedule, user, program and time zone (InfraNest #5801); `job_runs[]` alongside the samples — how each run of a job wrapped in `infranest-agent run --job` ended; `collectors.cron` and `collectors.job_reports` |
 | 22 | `services[].package` — the dpkg package that installed each unit's file, matched on the file systemd loaded the unit from, and `services[].local` — a unit written on this machine (InfraNest #5789); `priority` and `section` on every package, `processes[].package` included |
 | 21 | `processes[].package` — the dpkg package a process's executable belongs to, with its version and one-line description (InfraNest #5665); `processes[].services` and `services[].pid` — on Windows, which running services each process hosts, and the process each service runs in (#5670); `containers[].main_pid`, `main_process`, `main_command` and `ports[]` — what runs in each container, and the ports Docker publishes for it (#5710) |
@@ -194,6 +195,22 @@ nothing rather than a guess.
 | `system.raid[].failed` | int | Members marked `(F)` |
 | `system.raid[].sync` / `sync_percent` | string / float | A `resync`, `recovery` (rebuilding onto a replacement), `reshape` or `check` in progress, and how far it is |
 | `system.time_synced` | bool | Whether the kernel considers its clock synchronised — systemd-timedated's `NTPSynchronized`, which it computes from `adjtimex` (not `TIME_ERROR`, `STA_UNSYNC` clear). The kernel's own view, which chrony, ntpd and timesyncd all report into; asked over D-Bus because the unit forbids `adjtimex` itself. Rides on the services collector's switch. **A VM whose clock the hypervisor keeps (no NTP daemon) reads false while being right**, which is why the receiver alerts only for a machine it has seen synchronised. Absent where it cannot be asked — no systemd, no timedated, or `INFRANEST_SERVICES=0` |
+| `system.setup` | object | How the machine itself is set up (contract 24): read from `/etc/ssh`, `/etc/group`, `/etc/passwd`, APT's and dnf-automatic's configuration and dpkg's status database — files any user can read. Nothing is run: not `sshd -T`, not `getent`, not a package manager. Cached until one of the files read changes. **Linux only; absent on Windows and elsewhere, and absent when none of its parts could be read** |
+| `system.setup.ssh` | object | sshd's **global** settings as sshd resolves them: `/etc/ssh/sshd_config` and every file it `Include`s, in place (relative paths under `/etc/ssh`, globs in lexical order), **the first value of a keyword winning** — which is why the drop-ins Debian and Ubuntu include at the top of the file beat what is written below. Keywords and `yes`/`no` are case-insensitive and sent in lower case. **Absent where there is no `/etc/ssh/sshd_config`** (no OpenSSH server) |
+| `system.setup.ssh.password_authentication` / `kbd_interactive_authentication` / `use_pam` | string | `yes`, `no`, or **`unknown`**: a file sshd reads before the value is decided could not be read, so it may set it. Never sshd's default in that case. `ChallengeResponseAuthentication` is the old name of `KbdInteractiveAuthentication` and is read as the same setting. Not set anywhere: sshd's own default (`yes`, `yes`, `no`) |
+| `system.setup.ssh.authentication_methods` | string ≤128 | `AuthenticationMethods` as written (`publickey`, `publickey,password publickey,keyboard-interactive`), `any` when not set, or `unknown` |
+| `system.setup.ssh.permit_root_login` | string ≤128 | `yes`, `prohibit-password` (or its old name `without-password`), `forced-commands-only`, `no`, or `unknown`. Not set: `prohibit-password`, sshd's default |
+| `system.setup.ssh.ports` | array of int, max 16 | Every `Port` line, which accumulate rather than override; `[22]` when there is none. **Absent when unknown** — any file that could not be read may add one. `ListenAddress` with a port is not read |
+| `system.setup.ssh.set_in` | object of string ≤255 | Where each setting was decided, by its keyword in lower case (and `port`): `"/etc/ssh/sshd_config.d/50-cloud-init.conf:1"`, the file and line. A keyword not listed took sshd's default |
+| `system.setup.ssh.match` | array of string | The keywords above that a `Match` block sets: for some users or addresses they differ from the global values. A `Match` holds to the end of the file it is in. The values in a `Match` block are not sent |
+| `system.setup.ssh.unreadable` | array of string ≤255, max 100 | Files and folders sshd reads that the agent could not. One read inside a `Match` block leaves the global values known |
+| `system.setup.admin_groups[]` | array, max 3 | The administrator groups this machine has — `sudo`, `wheel`, `admin`, in that order — each with `group` and `members` (sorted names, max 64): the group's list in `/etc/group` and the users whose primary group it is in `/etc/passwd`. Names only. A group the machine does not have is not listed; **absent when `/etc/group` could not be read**, which is not "no administrators" |
+| `system.setup.updates` | object | Where automatic updates are decided, as evidence beside `system.auto_update`. Absent on a system that is neither Debian-like (`/etc/debian_version` or dpkg's database) nor RHEL-like (`/etc/redhat-release`) |
+| `system.setup.updates.family` / `tool` | string | `debian` and `unattended-upgrades`, or `rhel` and `dnf-automatic` |
+| `system.setup.updates.installed` | bool | Debian: dpkg's status database says the package is installed. RHEL: dnf-automatic's config file exists (the RPM database is not a format the agent reads). Absent when it could not be told |
+| `system.setup.updates.setting` / `set_in` | string ≤128 / string | Debian: `APT::Periodic::Unattended-Upgrade` as APT resolves it — `/etc/apt/apt.conf.d` in name order, then `/etc/apt/apt.conf`, the **last** value winning — and the file that set it. RHEL: `apply_updates` from `[commands]`. Absent when nothing sets it, which for APT is off |
+| `system.setup.updates.periodic_enable` | string ≤128 | Debian: `APT::Periodic::Enable` when something sets it; `0` switches every periodic task off |
+| `system.setup.updates.timer` | string | RHEL: `install` (dnf-automatic-install.timer, which applies whatever the file says) or `plain` (dnf-automatic.timer, which applies only when `apply_updates` is on), from the symlinks `systemctl enable` makes. Absent when neither is enabled |
 | `system.time_error_ms` | int ≥0 | **No longer sent** (InfraNest #4391). Only `adjtimex` has the kernel's `maxerror`, and the unit forbids that syscall. The receiver still accepts it |
 | `system.oom_kills` | int ≥0 | How many processes the kernel has killed for lack of memory **since this boot** — Linux's `oom_kill` in `/proc/vmstat`. A counter, not a level: `memory_percent` cannot see an OOM kill, because the kill is what frees the memory. The receiver alerts when it rises between pushes. Absent where the kernel keeps no such counter, which is not zero |
 | `system.boot_id` | string ≤64 | An identifier that changes on every boot — Linux's `/proc/sys/kernel/random/boot_id`. **Send it with `oom_kills`.** Without it a reboot is indistinguishable from a counter that did not move, and the receiver will not judge a rise it cannot place in a boot |
@@ -399,6 +416,9 @@ Contract 23 adds `cron[]` to the snapshot sample — at its caps, 200 jobs each 
 **376,200 bytes** — and `job_runs` beside the samples, at most **552,800 bytes** (50 runs of 20 maximum-length
 lines). Both together still leave a full batch well inside the limit. A real server has a dozen cron lines, and a
 report from a successful run carries no output at all.
+
+Contract 24 adds `system.setup` to the snapshot sample. At its caps — 16 ports, 100 file names in `unreadable`, three
+groups of 64 names — it is under **30 KB**; a real machine's is a few hundred bytes.
 
 `mounts` is **not** a snapshot and must stay on every sample. It looks like one, but `worst_mount_percent`
 is derived per reading and is what a disk rule averages over its window — a backfilled sample without
