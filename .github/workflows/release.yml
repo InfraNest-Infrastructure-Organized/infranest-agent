@@ -62,12 +62,8 @@ jobs:
       - name: The agent still only sends
         run: |
           fail=0
-          for os in linux windows darwin freebsd; do
-            deps=$(GOOS=$os go list -deps ./cmd/infranest-agent)
-            for pkg in os/exec net/rpc net/http/cgi net/http/fcgi; do
-              echo "$deps" | grep -qx "$pkg" && { echo "::error::$pkg is in the $os graph"; fail=1; }
-            done
-          done
+          # The same script ci.yml runs (InfraNest #5801), so a release enforces exactly what every commit was checked against.
+          scripts/check-only-sends.sh || fail=1
           if [ -s go.sum ]; then echo "::error::go.sum is not empty"; fail=1; fi
           if grep -rnE '"(StartUnit|StopUnit|RestartUnit|ReloadUnit|KillUnit|TryRestartUnit|ReloadOrRestartUnit|EnableUnitFiles|DisableUnitFiles|MaskUnitFiles|SetUnitProperties|Reexecute)"' --include='*.go' . ; then
             echo "::error::a unit-control method name is in the source"; fail=1
