@@ -3,6 +3,8 @@ package journal
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/binary"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -239,12 +241,14 @@ func TestLinesAreCleanedAndClippedOnARuneBoundary(t *testing.T) {
 	}
 }
 
+// FuzzOpen's seeds are the fixtures without their hash tables (shrink). The files journald writes are 3.7 MB, almost
+// all of it preallocated hash tables this reader never reads, and Go's fuzzer passes every input between its processes
+// as Go source: seeds that size parse for seconds per call, and a run of minutes executed two inputs (InfraNest #5868).
 func FuzzOpen(f *testing.F) {
-	for _, layout := range layouts {
-		f.Add(fixture(f, layout))
+	for _, name := range append(append([]string{}, layouts...), "authfail") {
+		f.Add(shrink(f, fixture(f, name)))
 	}
-	// Auth and authpriv lines, so the failed-login classifier is fuzzed along with the reader (InfraNest #5868).
-	f.Add(fixture(f, "authfail"))
+	f.Add(synthetic(3, at(10, 0)))
 	f.Fuzz(func(t *testing.T, b []byte) {
 		file, err := Open(bytes.NewReader(b), int64(len(b)))
 		if err != nil {
@@ -255,6 +259,100 @@ func FuzzOpen(f *testing.F) {
 		countHour(files, at(10, 0))
 		countHour(files, at(14, 0))
 	})
+}
+
+// shrink drops a journal file's hash tables and tags, moving every other object up and rewriting the offsets this
+// reader follows: the header's entry array, each entry array's next array and items, and each entry's items. What is
+// left reads exactly as the original does (TestAShrunkFileReadsAsTheOriginal) at a hundredth of the size.
+func shrink(t testing.TB, b []byte) []byte {
+	t.Helper()
+	u64 := func(off int64) int64 { return int64(binary.LittleEndian.Uint64(b[off:])) }
+	f, err := Open(bytes.NewReader(b), int64(len(b)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	type obj struct{ off, size int64 }
+	var kept []obj
+	moved := map[int64]int64{0: 0}
+	at := f.headerSize
+	for off := f.headerSize; off+objectHeaderSize <= int64(len(b)); {
+		size := u64(off + 8)
+		if size < objectHeaderSize {
+			break
+		}
+		if typ := b[off]; typ == objectData || typ == objectEntry || typ == objectEntryArray {
+			moved[off] = at
+			kept = append(kept, obj{off, size})
+			at += (size + 7) &^ 7
+		}
+		off += (size + 7) &^ 7
+	}
+	out := make([]byte, at)
+	copy(out, b[:f.headerSize])
+	put := func(dst int64, off int64, wide bool) {
+		if wide {
+			binary.LittleEndian.PutUint64(out[dst:], uint64(moved[off]))
+		} else {
+			binary.LittleEndian.PutUint32(out[dst:], uint32(moved[off]))
+		}
+	}
+	put(176, u64(176), true)
+	for _, o := range kept {
+		dst := moved[o.off]
+		copy(out[dst:], b[o.off:o.off+o.size])
+		switch b[o.off] {
+		case objectEntryArray:
+			put(dst+16, u64(o.off+16), true)
+			for i := int64(24); i+f.itemSize() <= o.size; i += f.itemSize() {
+				if f.compact {
+					put(dst+i, int64(binary.LittleEndian.Uint32(b[o.off+i:])), false)
+				} else {
+					put(dst+i, u64(o.off+i), true)
+				}
+			}
+		case objectEntry:
+			step := int64(16)
+			if f.compact {
+				step = 4
+			}
+			for i := int64(64); i+step <= o.size; i += step {
+				if f.compact {
+					put(dst+i, int64(binary.LittleEndian.Uint32(b[o.off+i:])), false)
+				} else {
+					put(dst+i, u64(o.off+i), true)
+				}
+			}
+		}
+	}
+
+	return out
+}
+
+func TestAShrunkFileReadsAsTheOriginal(t *testing.T) {
+	for _, name := range append(append([]string{}, layouts...), "authfail") {
+		b := fixture(t, name)
+		small := shrink(t, b)
+		if len(small)*20 > len(b) {
+			t.Errorf("%s: shrunk to %d of %d bytes", name, len(small), len(b))
+		}
+		read := func(b []byte) string {
+			file, err := Open(bytes.NewReader(b), int64(len(b)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			files := []*openFile{{File: file, closer: nopCloser{}}}
+			var sb strings.Builder
+			for h := 9; h <= 15; h++ {
+				fmt.Fprintf(&sb, "%+v\n", countHour(files, at(h, 0)))
+			}
+			fmt.Fprintf(&sb, "%+v\n", lastLines(files, "nginx.service", time.Time{}, at(23, 0)))
+
+			return sb.String()
+		}
+		if a, c := read(b), read(small); a != c {
+			t.Errorf("%s reads differently once shrunk:\n%s\nvs\n%s", name, a, c)
+		}
+	}
 }
 
 // synthetic writes a minimal journal file in the regular layout: one unit, n entries from `from`, and a
