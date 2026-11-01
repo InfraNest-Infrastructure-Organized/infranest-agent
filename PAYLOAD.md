@@ -257,7 +257,7 @@ snapshot**: a report is sent once more after a lost response, and the receiver k
 | `job_runs[].exit_code` | int 0–255 | The command's own. Killed by a signal: 128 + its number, as a shell reports it. Could not be started: 126, or 127 when not found |
 | `job_runs[].signal` | string ≤16 | The signal that ended it |
 | `job_runs[].error` | string ≤255 | Why it could not be started |
-| `job_runs[].output` | array of string ≤512, max 20 | **Only when it failed**, and never with `--no-output`: its last lines, stdout and stderr in the order they came, with anything shaped like a password, token or key replaced by `[masked]` — the rules InfraNest applies to a ticket it files, and the receiver applies them again |
+| `job_runs[].output` | array of string ≤512, max 20 | **Only when it failed**, and never with `--no-output`: its last lines, stdout and stderr in the order they came, with anything shaped like a password, token or key replaced by `[masked]` — the rules InfraNest applies to a ticket it files, and the receiver applies them again. Both ends are tested against one corpus of lines and expected results, [`testdata/masking-corpus.json`](testdata/masking-corpus.json) |
 | `job_runs[].output_withheld` | bool | It failed, and `--no-output` kept its output on the machine |
 | `job_runs[].user` | string ≤64 | Who ran it: **the report file's owner, read by the agent** — never what the report says about itself, because the folder is writable by anyone. A receiver should not believe a run reported for a job on another user's line |
 
