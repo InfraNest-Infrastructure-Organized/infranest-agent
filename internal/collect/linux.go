@@ -47,6 +47,10 @@ type Options struct {
 	// KnownPeers is the organization's other servers' addresses from the receiver (InfraNest #4903), nil when
 	// the agent holds none. Connections to these alone are reported by address.
 	KnownPeers map[netip.Addr]struct{}
+	// Packages names the dpkg package each reported process's executable belongs to (InfraNest #5665), from
+	// dpkg's world-readable database. Rides on the process list; skipped when nil. Held by the run loop, so the
+	// index is built once and rebuilt only when the database changes.
+	Packages *PackageIndex
 }
 
 // Collect takes one reading.
@@ -120,6 +124,8 @@ func Collect(opts Options) (Sample, error) {
 		} else {
 			s.Services = services
 			if containers != nil {
+				// What runs in each and what it publishes (InfraNest #5710), from /sys and /proc.
+				describeContainers(containers, "/", opts.ProcessArgs)
 				s.Containers = &containers
 			}
 		}
@@ -379,6 +385,10 @@ func readProcesses(opts Options) ([]Process, error) {
 			top[i].Unit, top[i].ContainerID = parseCgroupOwner(string(body))
 		}
 	}
+
+	// And which installed package each one is (InfraNest #5665) — after the cgroup, which says which are in a
+	// container and so are not this machine's packages.
+	attachPackages(top, opts.Packages, "/proc", time.Now())
 
 	// A CPU share is a difference between two readings, and the second reading is taken for the **top few
 	// only**. Re-walking all of /proc — three hundred directories on a busy machine — is what made this

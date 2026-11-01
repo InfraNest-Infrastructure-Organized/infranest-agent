@@ -6,7 +6,7 @@ This is a **public contract**. The agent is one implementation of it; anyone may
 endpoint does not care which is talking to it. So this document is the specification rather than a
 description of our code, and where the two disagree the endpoint's validation is the authority.
 
-**Contract version 20** — current as of the first agent release after `v0.16.0`.
+**Contract version 21** — current as of the first agent release after `v0.17.0`.
 
 Every change so far has been *additive*, and that is the rule rather than a run of luck: a field is added,
 never repurposed, and never made required after the fact. A sender written against version 1 keeps working
@@ -16,6 +16,7 @@ long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
+| 21 | `processes[].package` — the dpkg package a process's executable belongs to, with its version and one-line description (InfraNest #5665); `processes[].services` and `services[].pid` — on Windows, which running services each process hosts, and the process each service runs in (#5670); `containers[].main_pid`, `main_process`, `main_command` and `ports[]` — what runs in each container, and the ports Docker publishes for it (#5710) |
 | 20 | `disks[]` — read and write throughput and the share of time busy, **per whole disk** rather than summed (InfraNest #4922); `mounts[].disks` — the whole disks each filesystem is stored on, so a mount can be joined to its disk's activity |
 | 19 | `listening.known_peers` — established connections to and from the addresses the receiver sent back as `peer_addresses`, the same organization's other servers, by address, port and direction (InfraNest #4903). Never any other address |
 | 18 | `processes[].unit` / `container_id` — the systemd service or container each reported process belongs to (InfraNest #4917); `services[].last_trigger_at` / `next_elapse_at` — when a timer last fired and fires next (#4945) |
@@ -108,6 +109,12 @@ nothing rather than a guess.
 | `processes[].started_at` | RFC3339 | When the process started, from the machine's boot time plus its start offset. Absent rather than wrong where boot time could not be read: a date computed from a boot time we do not have is believed in a way an absent field is not |
 | `processes[].unit` | string ≤255 | The systemd service the process runs under (`php8.3-fpm.service`), from its world-readable `/proc/<pid>/cgroup`. Read for the reported processes only. Absent when the cgroup names no service — a login session, a kernel thread, or anything inside a container |
 | `processes[].container_id` | string ≤64 | The short ID of the container the process runs in, from the same cgroup (`docker-<id>.scope`, `libpod-<id>.scope`, or `/docker/<id>` on the `cgroupfs` driver). Set instead of `unit`, never with it |
+| `processes[].package` | object | The installed package the process's executable belongs to (contract 21). **Absent when it could not be placed on a file of an installed package, which is not "none"** — and always for a process in a container, whose files are its image's, not this machine's. Read from dpkg's world-readable database (`/var/lib/dpkg/status`, `/var/lib/dpkg/info/*.list`), never by running a package manager; the agent indexes the files under `bin`, `sbin` and `libexec` directories, and rebuilds that index only when the status file changes (at most every five minutes). RPM-based systems are not read yet |
+| `processes[].package.name` / `version` | string ≤128 | dpkg's `Package` and `Version`, verbatim — `postgresql-16`, `16.4-0ubuntu0.24.04.2` |
+| `processes[].package.description` | string ≤255 | The first line of the package's `Description:` — the packager's own one-line summary, in English |
+| `processes[].package.source` | string | `dpkg`. Room for `rpm` without a new shape |
+| `processes[].package.match` | string | How the process was placed on the package's file, strongest first: `executable` — the kernel's link to the running file (`/proc/<pid>/exe`), readable only for the agent's own processes; `command` — the absolute path the process was started by, the first word of its command line, accepted only when its base name is the kernel's name for the process; `name` — the kernel's name for the process looked up in `/usr/local/sbin`, `/usr/local/bin`, `/usr/sbin`, `/usr/bin`, `/sbin` and `/bin`, accepted only when exactly one package installs a program of that name there. **The command line is read for its first word, in memory, and never sent** unless command lines are switched on, as `command` already says. A process running a file an upgrade has since replaced is not matched: the package now holds another version |
+| `processes[].services` | array of string ≤128, max 16 | Windows only (contract 21): the display names of the running services this process hosts, whatever their start type, sorted. What tells one `svchost.exe` from thirty others — a process's command line is not readable on Windows without privilege. Absent where it hosts none |
 | `services[]` | array | Max 200 |
 | `services[].unit` | string ≤255 | |
 | `services[].description` | string ≤255 | |
@@ -121,6 +128,7 @@ nothing rather than a guess.
 | `services[].exec_main_status` | int | The exit status, or the signal number when the code says killed. Meaningless alone: `0` is a clean exit beside code 1 and is not a status at all beside code 2. Both are absent together where the service manager has no record of a main process ending — which is a unit that failed before it ever started, and is a different fact from exiting with zero |
 | `services[].last_trigger_at` | RFC3339 | For a `.timer` unit only: when it last fired. Absent for a timer that has never fired, and for every other unit |
 | `services[].next_elapse_at` | RFC3339 | For a `.timer` unit only: when it fires next, on the wall clock. Absent when it is not scheduled |
+| `services[].pid` | int ≥1 | Windows only (contract 21): the process the service runs in while it is running, from the Service Control Manager's own answer. Joins a service to its row in `processes[]`. Absent when it is not running. The automatic-start services listed here are only some of those running; `processes[].services` names the rest |
 | `containers` | array, max 100 | Running containers, from systemd's `docker-<id>.scope` / `libpod-<id>.scope` units — **never the Docker socket**, which is root on the host. A snapshot like `services`: on the newest sample only. Absent when the agent could not ask systemd; `[]` means none that systemd can see, which includes every host on Docker's `cgroupfs` driver |
 | `containers[].id` | string ≤64 | The short container ID (twelve hex digits). Names live in the runtime's own state, which only root can read; `docker ps --filter id=<id>` gives the name |
 | `containers[].runtime` | string ≤32 | `docker` or `podman` |
@@ -128,6 +136,13 @@ nothing rather than a guess.
 | `containers[].started_at` | RFC3339 | When this incarnation started — the scope's `ActiveEnterTimestamp`. A restart is a new scope, so this moves on every restart |
 | `containers[].restarts` | int ≥0 | Restarts this agent has seen since it began watching the container. **A counter and a lower bound**: counted once per collection, so several restarts between two readings count as one, and it starts at 0 when the agent starts — the receiver judges rises and treats a fall as a reset |
 | `containers[].memory_bytes` | int ≥0 | The scope's cgroup memory. Absent where systemd keeps no accounting |
+| `containers[].main_pid` | int ≥1 | The container's main process (contract 21): the lowest process ID in the scope's world-readable `cgroup.procs` (one cgroup down where the runtime nests them, as Podman does), past an init shim — `tini`, `docker-init`, `dumb-init`, `catatonit`. Absent when the cgroup could not be read |
+| `containers[].main_process` | string ≤255 | That process's name, from `/proc/<pid>/stat` — the kernel's, at most 15 bytes. What names a container whose processes are too small to be among `processes[]` |
+| `containers[].main_command` | string ≤255 | Its command line, **only when command lines are switched on** (`collectors.process_args`), clipped like a process's |
+| `containers[].ports[]` | array, max 32 | The ports Docker publishes on the host for this container, read from the command lines of Docker's `docker-proxy` processes. Only the flags `-proto`, `-host-ip`, `-host-port`, `-container-ip` and `-container-port` are read, in memory — they hold addresses and port numbers and nothing else — and the command line itself is never sent, so this needs no switch. A proxy names its container by address, which is matched against the addresses the container's own network namespace lists as local (`/proc/<pid>/net/fib_trie` and `if_inet6`, world-readable like `/proc/net/tcp`); those addresses are not sent. **Absent is not "none published"**: with Docker's userland proxy off the firewall forwards the port and no process says so. By host port. An IPv4 and an IPv6 binding of one port are two entries |
+| `containers[].ports[].protocol` | string | `tcp`, `udp` or `sctp` |
+| `containers[].ports[].host_ip` | string ≤45 | The host address it is published on — `0.0.0.0`, `::`, or a specific one. Absent when the proxy names none |
+| `containers[].ports[].host_port` / `container_port` | int 1–65535 | |
 | `renewers` | array, max 50 | What renews certificates on this machine. A snapshot like `services`: on the newest sample only. Absent when the collector is off; `[]` means it looked and found nothing. Read **only from world-readable files** — see below |
 | `renewers[].tool` | string | `certbot`, `caddy` or `traefik` |
 | `renewers[].name` | string ≤255 | certbot's lineage (the renewal config's name), or the certificate's main name |
@@ -323,6 +338,12 @@ the limit on the second shape, and one more reason the first cannot be sent.
 32 disks with 32-byte names and ten-digit rates, and eight such names on each of 64 mounts — they add
 **22,026 bytes** to a sample. A full batch of 60 at every cap, snapshots and `listening` on the newest, is
 then about **3.3 MB**: still well inside the limit.
+
+Contract 21 adds to the snapshot sample only. At the receiver's caps — 32 processes each with a package of
+maximum-length strings and sixteen 128-byte service names, and 100 containers each with a command line and 32
+IPv6-bound ports — it is **478,588 bytes**, about 3.8 MB for a full batch: still inside the limit. The agent
+itself reports ten processes, and a real Windows process hosts a handful of services, so the ordinary figure is
+a few kilobytes.
 
 `mounts` is **not** a snapshot and must stay on every sample. It looks like one, but `worst_mount_percent`
 is derived per reading and is what a disk rule averages over its window — a backfilled sample without

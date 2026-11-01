@@ -25,7 +25,7 @@ func TestWindowsDescribesItself(t *testing.T) {
 }
 
 func TestTheAutomaticServicesAreListedWithTheirState(t *testing.T) {
-	services, err := servicesWindows()
+	services, hosted, err := servicesWindows()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,6 +40,17 @@ func TestTheAutomaticServicesAreListedWithTheirState(t *testing.T) {
 	if eventLog == nil || eventLog.ActiveState != "active" || eventLog.SubState != "running" {
 		t.Fatalf("EventLog missing or not running among %d services: %+v", len(services), eventLog)
 	}
+	// A running service says which process it lives in (InfraNest #5670), and that process hosts it.
+	if eventLog.PID <= 0 {
+		t.Fatalf("EventLog is running and names no process: %+v", eventLog)
+	}
+	found := false
+	for _, name := range hosted[eventLog.PID] {
+		found = found || name == eventLog.Description
+	}
+	if !found {
+		t.Fatalf("process %d is not said to host %q: %v", eventLog.PID, eventLog.Description, hosted[eventLog.PID])
+	}
 	t.Logf("%d automatic services", len(services))
 }
 
@@ -53,5 +64,17 @@ func TestAStoppedServiceIsFailedOnlyWithAnErrorExit(t *testing.T) {
 	}
 	if broken.ActiveState != "failed" || broken.ExecMainStatus == nil || *broken.ExecMainStatus != 1066 || broken.ExecMainCode == nil || *broken.ExecMainCode != 1 {
 		t.Fatalf("an error exit is failed: %+v", broken)
+	}
+}
+
+func TestARunningServiceNamesItsProcessAndAStoppedOneDoesNot(t *testing.T) {
+	running := windowsService("w", "W", serviceStatusProcess{CurrentState: serviceRunning, ProcessID: 1234})
+	stopped := windowsService("s", "S", serviceStatusProcess{CurrentState: serviceStopped, ProcessID: 0})
+
+	if running.PID != 1234 {
+		t.Fatalf("a running service names its process: %+v", running)
+	}
+	if stopped.PID != 0 {
+		t.Fatalf("a stopped service names none: %+v", stopped)
 	}
 }

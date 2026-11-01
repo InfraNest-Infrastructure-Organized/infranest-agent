@@ -300,6 +300,12 @@ func (c *Conn) ActiveEnteredAt(unitPath string) (time.Time, error) {
 	return c.unitTimestamp(unitPath, "ActiveEnterTimestamp")
 }
 
+// ScopeControlGroup is the cgroup a scope unit's processes live in, as a path below the cgroup root —
+// "/system.slice/docker-<id>.scope" (InfraNest #5710). Where its world-readable `cgroup.procs` lists them.
+func (c *Conn) ScopeControlGroup(unitPath string) (string, error) {
+	return c.unitPropertyString(unitPath, scopeInterface, "ControlGroup")
+}
+
 // ScopeMemoryCurrent is what a scope unit's cgroup is using, in bytes — the scope-interface twin of
 // {@link MemoryCurrent}, which asks the service interface and is an error on a scope.
 func (c *Conn) ScopeMemoryCurrent(unitPath string) (uint64, error) {

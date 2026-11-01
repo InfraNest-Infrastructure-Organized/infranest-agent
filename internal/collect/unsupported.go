@@ -22,6 +22,7 @@ type Options struct {
 	Traffic      *TrafficTracker
 	Listening    bool
 	KnownPeers   map[netip.Addr]struct{}
+	Packages     *PackageIndex
 }
 
 // Collect reports honestly that this platform is not implemented rather than returning zeros.

@@ -99,6 +99,8 @@ func run(args []string, stdout, stderr *os.File) error {
 			// And the containers it can see (#2809). A fresh tracker, so every restart count reads 0: one
 			// reading has nothing earlier to count a restart against.
 			Containers: collect.NewContainerTracker(),
+			// And which package each process belongs to (InfraNest #5665).
+			Packages: collect.NewPackageIndex(),
 		})
 	case "run":
 		return runAgent(stdout, stderr, environment(*configPath))
