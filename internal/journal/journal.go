@@ -159,11 +159,17 @@ type Snippet struct {
 	Compressed int
 	// Lines cut to MaxLineBytes, or left out to stay within MaxSnippetBytes.
 	Truncated bool
+	// Why there are no lines on purpose: WithheldLogin for a login unit, whose lines are never read.
+	Withheld string
 }
 
 // LastLines reads a unit's last lines written between `since` and `until`, at priority MaxPriority or more urgent,
-// masked with the rules a job's output is masked with — oldest first.
+// masked with the rules a job's output is masked with — oldest first. A login unit's lines are not read at all, and a
+// login record is dropped from any unit's (login.go).
 func LastLines(unit string, since, until time.Time) Snippet {
+	if LoginUnit(unit) {
+		return Snippet{Withheld: WithheldLogin}
+	}
 	files := open()
 	defer closeAll(files)
 
@@ -197,6 +203,10 @@ func lastLines(files []*openFile, unit string, since, until time.Time) Snippet {
 				p = 6
 			}
 			if p > MaxPriority {
+				return true
+			}
+			// Before its message is read: a login record is never read, whatever unit it was written under.
+			if loginRecord(e) {
 				return true
 			}
 			if !e.HasMessage() {
@@ -306,10 +316,12 @@ func countHour(files []*openFile, hour time.Time) Hour {
 			if e.Unit == "" || !e.At.Before(end) || e.Priority < 0 || e.Priority > 4 {
 				return true
 			}
-			c := counts[e.Unit]
+			// A login unit's per-connection instances are counted together, under their template's name (login.go).
+			name := ReportedUnit(e.Unit)
+			c := counts[name]
 			if c == nil {
-				c = &UnitCount{Unit: clip(clean(e.Unit), 256)}
-				counts[e.Unit] = c
+				c = &UnitCount{Unit: clip(clean(name), 256)}
+				counts[name] = c
 			}
 			if e.Priority <= 3 {
 				c.Errors++

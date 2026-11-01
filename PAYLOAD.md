@@ -16,7 +16,7 @@ long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
-| 25 | `journal` alongside the samples — whether the system journal is read here and why not, on every push from Linux; a unit's last lines, masked, once, when it fails, is killed for memory or starts restarting in a loop; and each hour's error and warning counts per unit (InfraNest #5848). **Read only when the machine's owner has added the agent's user to `systemd-journal`**, and never with `INFRANEST_JOURNAL=0` |
+| 25 | `journal` alongside the samples — whether the system journal is read here and why not, on every push from Linux; a unit's last lines, masked, once, when it fails, is killed for memory or starts restarting in a loop; and each hour's error and warning counts per unit (InfraNest #5848). **Read only when the machine's owner has added the agent's user to `systemd-journal`**, and never with `INFRANEST_JOURNAL=0`. **Login records are never sent**: a login service's event carries no lines and `lines_withheld: "login"`, and a login record is dropped from any unit's lines (InfraNest #5859, agent v0.22.1) |
 | 24 | `system.setup` — how the machine itself is set up, from world-readable files only (InfraNest #5815): sshd's effective global login settings with the file and line that decided each, the members of the `sudo`, `wheel` and `admin` groups, and where automatic updates are switched on or off. Linux only; Windows sends nothing new |
 | 23 | `cron[]` — what cron runs: the jobs in `/etc/crontab` and `/etc/cron.d`, and the scripts in the run-parts folders, with schedule, user, program and time zone (InfraNest #5801); `job_runs[]` alongside the samples — how each run of a job wrapped in `infranest-agent run --job` ended; `collectors.cron` and `collectors.job_reports` |
 | 22 | `services[].package` — the dpkg package that installed each unit's file, matched on the file systemd loaded the unit from, and `services[].local` — a unit written on this machine (InfraNest #5789); `priority` and `section` on every package, `processes[].package` included |
@@ -276,16 +276,41 @@ that is why it is not done by the installer. `INFRANEST_JOURNAL=0` keeps it off 
 
 The agent reads the journal files itself — `/var/log/journal/*/system*.journal`, else `/run/log/journal` — with a small
 reader of the documented file format. It starts no process (`journalctl` is not used) and links no library. A user's
-own journal is never opened. It reads four things from an entry: its time, `PRIORITY`, `MESSAGE`, and the unit it is
-about (`UNIT=` on systemd's own lines about a unit, else `_SYSTEMD_UNIT`). A message journald stored compressed (over
-512 bytes, by default) is **skipped and counted**, never decompressed or guessed at.
+own journal is never opened. It reads seven things from an entry: its time, `PRIORITY`, `MESSAGE`, the unit it is
+about (`UNIT=` on systemd's own lines about a unit, else `_SYSTEMD_UNIT`), and — only to decide what is a login record —
+`SYSLOG_FACILITY`, `SYSLOG_IDENTIFIER` and `_TRANSPORT`. A message journald stored compressed (over 512 bytes, by
+default) is **skipped and counted**, never decompressed or guessed at.
+
+**Login records are never sent** (InfraNest #5859, agent v0.22.1). Masking looks for secrets; it does not touch a user
+name or an address, and a login service's last lines are made of them (`Accepted publickey for jaspar from
+203.0.113.7`). So, on the machine:
+
+1. **A login service's lines are not read at all.** Its event is still sent — that it failed, and how — with
+   `lines: []` and `lines_withheld: "login"`. A login service is one of these, matched on the unit's name without
+   `.service` and without a template instance (a `*` is a prefix): `ssh`, `sshd`, `sshd-session`, `dropbear` (remote
+   logins, and `ssh@`/`sshd@` per-connection instances); `systemd-logind`, `login`, `getty`, `serial-getty`,
+   `console-getty`, `container-getty`, `autovt` (console and session logins); `su`, `sudo`; `polkit`, `polkitd`;
+   `gdm*`, `lightdm`, `sddm`, `xrdp*` (graphical and remote-desktop logins); `cockpit*` (the web console);
+   `sssd*`, `winbind`, `nslcd` (directory logins); `fail2ban`, `crowdsec`, `sshguard` (their log is the addresses that
+   tried to log in). Not listed, on purpose: cron, and servers that authenticate their own clients (mail, FTP) — their
+   own lines are why they failed; what they write as login records is dropped by the next rule.
+2. **A login record is dropped from every other unit's lines**, before its message is read: a line written to the
+   `auth` or `authpriv` syslog facility (`SYSLOG_FACILITY` 4 or 10 — where PAM, sshd, sudo, su and login write, so
+   cron's `pam_unix(cron:session)` lines go), a line whose `SYSLOG_IDENTIFIER` is a login program (`sshd`,
+   `sshd-session`, `sshd-auth`, `dropbear`, `sudo`, `su`, `login`, `systemd-logind`, `polkitd`,
+   `polkit-agent-helper-1`, `unix_chkpwd` — sshd run with `-e` in a container logs to stderr with no facility), and
+   the kernel's audit records (`_TRANSPORT=audit`).
+3. **A login service's per-connection instance is named by its template**: `sshd@3-10.0.0.1:22-203.0.113.7:51234.service`
+   carries the peer's address, so `journal` names it `sshd@.service`, in its event and in the hourly counts.
+
+The hourly counts are numbers per unit and still count these lines.
 
 | Field | Type | Notes |
 |---|---|---|
 | `journal.readable` | bool | Whether the journal could be read on this push. **Sent on every push from Linux, never omitted when false** — it is what a receiver says Off or On from |
 | `journal.reason` | string | `ok`; `off` (`INFRANEST_JOURNAL=0`); `no_permission` (the files are there and the agent may not read them — the opt-in has not been made, or the agent has not been restarted since); `no_journal` (no system journal on disk: `Storage=none`, or no journald); `unknown_format` (a file this agent cannot read — a newer format, or a damaged header) |
 | `journal.events[]` | array, max 10 | A unit's last lines, **once per event**. Absent when there are none, and when the journal is not read |
-| `journal.events[].unit` | string | A `.service` unit |
+| `journal.events[].unit` | string | A `.service` unit. A login service's template instance is sent as its template (`sshd@.service`) |
 | `journal.events[].event` | string | `failed` — it entered `failed` (told again only after it recovered and failed anew); `oom_kill` — it failed with systemd's result `oom-kill`; `restart_loop` — its restart counter rose three times within a day (then not again for that unit for six hours) |
 | `journal.events[].at` | RFC3339 | When it failed (systemd's state change), or when the loop was seen |
 | `journal.events[].lines[]` | array, max 40 | Its last 20 entries at priority 6 (info) or more urgent, from the hour before `at` up to a minute after, oldest first — a message holding several lines is one line each. **Masked** with the rules `job_runs[].output` uses; the receiver masks again. `[]` when the journal held nothing from the unit in that hour |
@@ -294,6 +319,7 @@ about (`UNIT=` on systemd's own lines about a unit, else `_SYSTEMD_UNIT`). A mes
 | `journal.events[].lines[].message` | string ≤300 bytes | Control characters removed, invalid UTF-8 replaced |
 | `journal.events[].compressed` | int | Entries in the window whose message was stored compressed and not read |
 | `journal.events[].truncated` | bool | A line was cut at 300 bytes, a message at 2 KB, or the oldest lines were left out to keep the event within 6 KB |
+| `journal.events[].lines_withheld` | string | `login` — the unit is a login service (above): `lines` is `[]` because its lines are login records, and the agent did not read them. Absent otherwise. Agent v0.22.1 and later; an older agent never sends it |
 | `journal.hours[]` | array, max 6 | Each complete hour's counts, sent on the first push after the hour ends (and the hour before the agent started, on its first push). Kept until a push lands |
 | `journal.hours[].hour` | RFC3339 | The hour's start, UTC |
 | `journal.hours[].units[]` | array, max 20 | The units that logged at priority 4 or more urgent in the hour, the most errors first. `[]` for a quiet hour |
@@ -303,7 +329,7 @@ about (`UNIT=` on systemd's own lines about a unit, else `_SYSTEMD_UNIT`). A mes
 | `journal.hours[].partial` | bool | The hour had more than 200,000 entries; the counts are of its newest 200,000 |
 
 **What is never sent**: the log itself, any line from a unit that did not fail or loop, a line at debug priority, a
-user's journal, or any field of an entry beyond the four above.
+user's journal, a login record, or any field of an entry beyond the message, its time and priority, and its unit.
 
 ## `disk_usage`
 
