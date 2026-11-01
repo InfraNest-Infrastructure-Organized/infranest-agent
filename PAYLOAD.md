@@ -112,7 +112,7 @@ nothing rather than a guess.
 | `processes[].cpu_percent` | 0–100 | Share of one core over the sampling interval, measured for the reported few only. **Clamped at 100**: a threaded process genuinely exceeds one core, and the endpoint validates this field as a percentage — a push carrying 340 fails validation for the whole batch |
 | `processes[].pid` | int ≥0 | |
 | `processes[].started_at` | RFC3339 | When the process started, from the machine's boot time plus its start offset. Absent rather than wrong where boot time could not be read: a date computed from a boot time we do not have is believed in a way an absent field is not |
-| `processes[].unit` | string ≤255 | The systemd service the process runs under (`php8.3-fpm.service`), from its world-readable `/proc/<pid>/cgroup`. Read for the reported processes only. Absent when the cgroup names no service — a login session, a kernel thread, or anything inside a container |
+| `processes[].unit` | string ≤255 | The systemd service the process runs under (`php8.3-fpm.service`), from its world-readable `/proc/<pid>/cgroup`. Read for the reported processes only. A [login service](#journal)'s per-connection instance is sent as its template (agent v0.23.1, InfraNest #5864): socket-activated sshd names each connection after both ends of it (`sshd@3-10.0.0.1:22-203.0.113.7:51234.service`), so its processes are reported under `sshd@.service`. Absent when the cgroup names no service — a login session, a kernel thread, or anything inside a container |
 | `processes[].container_id` | string ≤64 | The short ID of the container the process runs in, from the same cgroup (`docker-<id>.scope`, `libpod-<id>.scope`, or `/docker/<id>` on the `cgroupfs` driver). Set instead of `unit`, never with it |
 | `processes[].package` | object | The installed package the process's executable belongs to (contract 21). **Absent when it could not be placed on a file of an installed package, which is not "none"** — and always for a process in a container, whose files are its image's, not this machine's. Read from dpkg's world-readable database (`/var/lib/dpkg/status`, `/var/lib/dpkg/info/*.list`), never by running a package manager; the agent indexes the files under `bin`, `sbin` and `libexec` directories, and rebuilds that index only when the status file changes (at most every five minutes). RPM-based systems are not read yet |
 | `processes[].package.name` / `version` | string ≤128 | dpkg's `Package` and `Version`, verbatim — `postgresql-16`, `16.4-0ubuntu0.24.04.2` |
@@ -122,7 +122,7 @@ nothing rather than a guess.
 | `processes[].package.match` | string | How the process was placed on the package's file, strongest first: `executable` — the kernel's link to the running file (`/proc/<pid>/exe`), readable only for the agent's own processes; `command` — the absolute path the process was started by, the first word of its command line, accepted only when its base name is the kernel's name for the process; `name` — the kernel's name for the process looked up in `/usr/local/sbin`, `/usr/local/bin`, `/usr/sbin`, `/usr/bin`, `/sbin` and `/bin`, accepted only when exactly one package installs a program of that name there. **The command line is read for its first word, in memory, and never sent** unless command lines are switched on, as `command` already says. A process running a file an upgrade has since replaced is not matched: the package now holds another version |
 | `processes[].services` | array of string ≤128, max 16 | Windows only (contract 21): the display names of the running services this process hosts, whatever their start type, sorted. What tells one `svchost.exe` from thirty others — a process's command line is not readable on Windows without privilege. Absent where it hosts none |
 | `services[]` | array | Max 200 |
-| `services[].unit` | string ≤255 | |
+| `services[].unit` | string ≤255 | Units that are enabled, plus any that has failed. Never a template (`sshd@.service`), and never a [login service](#journal)'s per-connection instance (agent v0.23.1, InfraNest #5864): `sshd@3-10.0.0.1:22-203.0.113.7:51234.service` is named after the client's address, and a client that drops out during authentication leaves it `failed` — one connection failing is not the service failing, so it is left out rather than renamed. The listening `sshd.socket` and `sshd.service` are what say whether SSH works |
 | `services[].description` | string ≤255 | |
 | `services[].active_state` | string ≤32 | systemd's own vocabulary — `active`, `inactive`, `failed`, `activating`, `deactivating` — sent verbatim rather than mapped. What "exited" means for a oneshot is a judgement the page makes with the whole picture |
 | `services[].sub_state` | string ≤32 | |
@@ -302,7 +302,9 @@ name or an address, and a login service's last lines are made of them (`Accepted
    `polkit-agent-helper-1`, `unix_chkpwd` — sshd run with `-e` in a container logs to stderr with no facility), and
    the kernel's audit records (`_TRANSPORT=audit`).
 3. **A login service's per-connection instance is named by its template**: `sshd@3-10.0.0.1:22-203.0.113.7:51234.service`
-   carries the peer's address, so `journal` names it `sshd@.service`, in its event and in the hourly counts.
+   carries the peer's address, so `journal` names it `sshd@.service`, in its event and in the hourly counts. The same
+   list decides it everywhere a unit is named (agent v0.23.1, InfraNest #5864): `processes[].unit` reports such an
+   instance as its template, and `services[]` leaves it out.
 
 The hourly counts are numbers per unit and still count these lines, and an hour's [failed logins](#failed-logins) are counted from the auth lines before they are dropped — a number, never the line.
 

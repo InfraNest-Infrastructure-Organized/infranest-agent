@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/dbus"
+	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/loginunit"
 )
 
 // maxServices bounds what one collection reports, matching the server's own cap.
@@ -251,6 +252,12 @@ func watchable(unit dbus.Unit) bool {
 		return false
 	// A template has no state of its own; its instances do, and they appear separately.
 	case strings.Contains(unit.Name, "@."):
+		return false
+	// A login service's per-connection instance (InfraNest #5864): socket-activated sshd runs each connection as
+	// `sshd@3-10.0.0.1:22-203.0.113.7:51234.service`, named after the peer, and a client that drops out during
+	// authentication leaves it `failed`. One connection failing is not the service failing — the listening
+	// `sshd.socket`/`sshd.service` is what is watched — and the name is the client's address, which never leaves.
+	case loginunit.Instance(unit.Name):
 		return false
 	// `not-found` is a unit somebody referenced and systemd could not load. Reporting it as a service is
 	// how a typo in another unit's `Requires=` becomes an alert about a service that does not exist.
