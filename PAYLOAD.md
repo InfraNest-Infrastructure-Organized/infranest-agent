@@ -6,7 +6,7 @@ This is a **public contract**. The agent is one implementation of it; anyone may
 endpoint does not care which is talking to it. So this document is the specification rather than a
 description of our code, and where the two disagree the endpoint's validation is the authority.
 
-**Contract version 24** — current as of the first agent release after `v0.20.1`.
+**Contract version 25** — current as of the first agent release after `v0.21.0`.
 
 Every change so far has been *additive*, and that is the rule rather than a run of luck: a field is added,
 never repurposed, and never made required after the fact. A sender written against version 1 keeps working
@@ -16,6 +16,7 @@ long as anyone is running the old one.
 
 | Version | Added |
 |---|---|
+| 25 | `journal` alongside the samples — whether the system journal is read here and why not, on every push from Linux; a unit's last lines, masked, once, when it fails, is killed for memory or starts restarting in a loop; and each hour's error and warning counts per unit (InfraNest #5848). **Read only when the machine's owner has added the agent's user to `systemd-journal`**, and never with `INFRANEST_JOURNAL=0` |
 | 24 | `system.setup` — how the machine itself is set up, from world-readable files only (InfraNest #5815): sshd's effective global login settings with the file and line that decided each, the members of the `sudo`, `wheel` and `admin` groups, and where automatic updates are switched on or off. Linux only; Windows sends nothing new |
 | 23 | `cron[]` — what cron runs: the jobs in `/etc/crontab` and `/etc/cron.d`, and the scripts in the run-parts folders, with schedule, user, program and time zone (InfraNest #5801); `job_runs[]` alongside the samples — how each run of a job wrapped in `infranest-agent run --job` ended; `collectors.cron` and `collectors.job_reports` |
 | 22 | `services[].package` — the dpkg package that installed each unit's file, matched on the file systemd loaded the unit from, and `services[].local` — a unit written on this machine (InfraNest #5789); `priority` and `section` on every package, `processes[].package` included |
@@ -229,6 +230,7 @@ nothing rather than a guess.
 | `failed` | `{"collector": "reason"}`, max 32, reasons ≤255. Collectors that could not read what they were asked for. Reported rather than hidden — silently sending fewer fields looks identical to a machine that has less to say |
 | `disk_usage` | One mount's directory breakdown. Rides on whichever push follows the walk — see below |
 | `job_runs` | What `infranest-agent run --job` reported since the last push (contract 23) — see below. Absent when there is nothing |
+| `journal` | Whether the system journal is read here, and what it said since the last push (contract 25) — see below. **Linux only: absent on every other system** |
 
 ## `job_runs`
 
@@ -257,6 +259,51 @@ snapshot**: a report is sent once more after a lost response, and the receiver k
 | `job_runs[].output` | array of string ≤512, max 20 | **Only when it failed**, and never with `--no-output`: its last lines, stdout and stderr in the order they came, with anything shaped like a password, token or key replaced by `[masked]` — the rules InfraNest applies to a ticket it files, and the receiver applies them again |
 | `job_runs[].output_withheld` | bool | It failed, and `--no-output` kept its output on the machine |
 | `job_runs[].user` | string ≤64 | Who ran it: **the report file's owner, read by the agent** — never what the report says about itself, because the folder is writable by anyone. A receiver should not believe a run reported for a job on another user's line |
+
+## `journal`
+
+Why a service failed, from the system log (contract 25). **Off until the machine's owner opts in**: journald's files
+are readable by the `systemd-journal` group (and `adm` or `wheel` on some distributions, through an ACL), and the agent's
+user is in none of them unless somebody runs
+
+```
+sudo usermod -aG systemd-journal infranest-agent && sudo systemctl restart infranest-agent
+```
+
+— undone by `sudo gpasswd -d infranest-agent systemd-journal` and a restart. The group grants reading the journal and
+nothing else: no root, no capability, no command. It does grant reading *all* of it, which can name users and paths;
+that is why it is not done by the installer. `INFRANEST_JOURNAL=0` keeps it off even with the group.
+
+The agent reads the journal files itself — `/var/log/journal/*/system*.journal`, else `/run/log/journal` — with a small
+reader of the documented file format. It starts no process (`journalctl` is not used) and links no library. A user's
+own journal is never opened. It reads four things from an entry: its time, `PRIORITY`, `MESSAGE`, and the unit it is
+about (`UNIT=` on systemd's own lines about a unit, else `_SYSTEMD_UNIT`). A message journald stored compressed (over
+512 bytes, by default) is **skipped and counted**, never decompressed or guessed at.
+
+| Field | Type | Notes |
+|---|---|---|
+| `journal.readable` | bool | Whether the journal could be read on this push. **Sent on every push from Linux, never omitted when false** — it is what a receiver says Off or On from |
+| `journal.reason` | string | `ok`; `off` (`INFRANEST_JOURNAL=0`); `no_permission` (the files are there and the agent may not read them — the opt-in has not been made, or the agent has not been restarted since); `no_journal` (no system journal on disk: `Storage=none`, or no journald); `unknown_format` (a file this agent cannot read — a newer format, or a damaged header) |
+| `journal.events[]` | array, max 10 | A unit's last lines, **once per event**. Absent when there are none, and when the journal is not read |
+| `journal.events[].unit` | string | A `.service` unit |
+| `journal.events[].event` | string | `failed` — it entered `failed` (told again only after it recovered and failed anew); `oom_kill` — it failed with systemd's result `oom-kill`; `restart_loop` — its restart counter rose three times within a day (then not again for that unit for six hours) |
+| `journal.events[].at` | RFC3339 | When it failed (systemd's state change), or when the loop was seen |
+| `journal.events[].lines[]` | array, max 40 | Its last 20 entries at priority 6 (info) or more urgent, from the hour before `at` up to a minute after, oldest first — a message holding several lines is one line each. **Masked** with the rules `job_runs[].output` uses; the receiver masks again. `[]` when the journal held nothing from the unit in that hour |
+| `journal.events[].lines[].at` | RFC3339 | The entry's time |
+| `journal.events[].lines[].priority` | int 0–7 | syslog's: 0 emerg … 3 err, 4 warning, 5 notice, 6 info. An entry with none is sent as 6, journald's own default |
+| `journal.events[].lines[].message` | string ≤300 bytes | Control characters removed, invalid UTF-8 replaced |
+| `journal.events[].compressed` | int | Entries in the window whose message was stored compressed and not read |
+| `journal.events[].truncated` | bool | A line was cut at 300 bytes, a message at 2 KB, or the oldest lines were left out to keep the event within 6 KB |
+| `journal.hours[]` | array, max 6 | Each complete hour's counts, sent on the first push after the hour ends (and the hour before the agent started, on its first push). Kept until a push lands |
+| `journal.hours[].hour` | RFC3339 | The hour's start, UTC |
+| `journal.hours[].units[]` | array, max 20 | The units that logged at priority 4 or more urgent in the hour, the most errors first. `[]` for a quiet hour |
+| `journal.hours[].units[].unit` | string ≤256 | |
+| `journal.hours[].units[].errors` / `warnings` | int | Priority 0–3, and priority 4 |
+| `journal.hours[].more` | int | Units left out past the twenty |
+| `journal.hours[].partial` | bool | The hour had more than 200,000 entries; the counts are of its newest 200,000 |
+
+**What is never sent**: the log itself, any line from a unit that did not fail or loop, a line at debug priority, a
+user's journal, or any field of an entry beyond the four above.
 
 ## `disk_usage`
 
@@ -417,6 +464,10 @@ Contract 23 adds `cron[]` to the snapshot sample — at its caps, 200 jobs each 
 lines). Both together still leave a full batch well inside the limit. A real server has a dozen cron lines, and a
 report from a successful run carries no output at all.
 
+Contract 25 adds `journal` beside the samples. At its caps — 10 events of 40 lines of 300 bytes, and 6 hours of 20
+units with 256-byte names — it is under **150 KB**; the agent's own 6 KB budget per event keeps a real one far below
+that, and a push with nothing to tell carries `{"readable": true, "reason": "ok"}`.
+
 Contract 24 adds `system.setup` to the snapshot sample. At its caps — 16 ports, 100 file names in `unreadable`, three
 groups of 64 names — it is under **30 KB**; a real machine's is a few hundred bytes.
 
@@ -424,9 +475,11 @@ groups of 64 names — it is under **30 KB**; a real machine's is a few hundred 
 is derived per reading and is what a disk rule averages over its window — a backfilled sample without
 mounts is a hole in that series rather than a saving.
 
-## Why there is no log excerpt
+## Why there was no log excerpt, and what changed
 
-There is no field here for a unit's log output, and that is a decision rather than a gap.
+**Until contract 25** there was no field for a unit's log output, and the reasoning below was the decision. It is kept
+because contract 25 answers each point rather than overruling it.
+
 
 Reading the journal would mean one of three things, and each costs more than it returns. Shelling out to
 `journalctl` is not available: the agent's dependency graph is checked in CI on every platform to contain
@@ -445,9 +498,17 @@ can find it, and it can be translated — none of which prose can do.
 printed *to the wrapper somebody put in front of it*, held in the wrapper's memory, masked before they are written,
 and sent only when that run failed — no journal is read, and nothing runs that the line's owner did not write.
 
-A future version may attach the last lines of output at the moment a unit enters `failed`, which is bounded
-and needs no inbound channel. It still needs a journal reader, so it inherits the cost above, and it will
-only be built if somebody asks for it.
+Contract 25 attaches the last lines at the moment a unit enters `failed` — bounded, and needing no inbound channel —
+because customers asked for the *why*. What it does about each cost:
+
+- **No subprocess, no cgo**: the agent reads the files with a reader of the documented format in Go, kept small on
+  purpose — no hash tables, no decompression, every offset checked against the file before it is read, tested against
+  files systemd's own writer produced in both of its layouts and against those files cut and damaged.
+- **The file most likely to hold credentials**: it is not readable by the agent until the owner adds it to the
+  `systemd-journal` group, and the owner is told what that group can read before doing it.
+- **Prose, redaction, storage**: only a failed or looping unit's last lines leave, masked with the job output's rules
+  (and masked again on arrival); InfraNest keeps them 30 days. `result` stays the field a rule acts on — the lines are
+  for the person reading the card.
 
 ## The lengths are not advisory
 

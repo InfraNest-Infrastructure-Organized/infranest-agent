@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 fail=0
 module=github.com/InfraNest-Infrastructure-Organized/infranest-agent
-service="./internal/agent ./internal/collect ./internal/push ./internal/spool ./internal/jobs ./internal/config ./internal/dbus"
+service="./internal/agent ./internal/collect ./internal/push ./internal/spool ./internal/jobs ./internal/journal ./internal/config ./internal/dbus"
 for os in linux windows darwin freebsd; do
   deps=$(GOOS=$os go list -deps $service)
   for pkg in os/exec net/rpc net/http/cgi net/http/fcgi "$module/internal/jobrun"; do

@@ -26,12 +26,15 @@ type fakeSender struct {
 	collectors []push.Collectors
 	// The job reports each push carried (InfraNest #5801), nil where it carried none.
 	jobRuns []any
-	answer  func(n int) (push.Result, error)
+	// The `journal` each push carried (InfraNest #5848), nil where it carried none.
+	journals []any
+	answer   func(n int) (push.Result, error)
 }
 
-func (f *fakeSender) Send(_ context.Context, url string, samples []json.RawMessage, _ map[string]string, usage any, jobRuns any, collectors push.Collectors) (push.Result, error) {
+func (f *fakeSender) Send(_ context.Context, url string, samples []json.RawMessage, _ map[string]string, usage any, jobRuns any, journal any, collectors push.Collectors) (push.Result, error) {
 	f.batches = append(f.batches, samples)
 	f.jobRuns = append(f.jobRuns, jobRuns)
+	f.journals = append(f.journals, journal)
 	f.collectors = append(f.collectors, collectors)
 	f.urls = append(f.urls, url)
 	if usage != nil {

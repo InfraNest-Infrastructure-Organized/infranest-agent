@@ -322,6 +322,8 @@ Configuration (from the environment; systemd reads /etc/infranest/agent.conf):
   INFRANEST_PROCESS_ARGS include command lines — these often contain credentials
   INFRANEST_SERVICES     watch systemd units and report the failed ones (default on)
   INFRANEST_CRON         list the jobs in /etc/crontab and /etc/cron.d (default on)
+  INFRANEST_JOURNAL      a failed service's last lines, once the agent may read the
+                         system log (usermod -aG systemd-journal infranest-agent)
 
 A reading that cannot be delivered is kept on disk and sent when the connection comes
 back, so a network problem costs nothing but the delay.

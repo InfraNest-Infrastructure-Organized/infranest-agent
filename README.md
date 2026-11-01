@@ -67,6 +67,7 @@ is the first thing documented rather than a debugging flag buried at the bottom.
 | **Certificate renewers** | what renews this machine's certificates, and whether its last run worked: certbot's renewal configs (which certificates, which authenticator) and its systemd timer (when it last ran, how it finished, when it runs next); Caddy's and Traefik's certificate stores where they can be read. Only world-readable files — certbot's configs are; **private keys are never opened**, and Caddy's and Traefik's stores are owner-only on a stock install, so for those the agent reports that the store is there and refused it rather than reading it. `INFRANEST_RENEWERS=0` turns it off |
 | **Listening ports** | every TCP port in `LISTEN` and every bound, unconnected UDP port, read from `/proc/net/tcp`, `tcp6`, `udp` and `udp6` — which are world-readable — with the address each is bound to and whether that is every address, a specific one, or loopback only. For each TCP port, **how many distinct machines are connected, by class** (loopback, private, public). **Counts only: the addresses of whoever connects are never sent** — they are your own clients, and nothing here needs them. **No program names** either: linking a socket to its process means reading `/proc/<pid>/fd`, which an unprivileged agent can do only for itself, so the agent reports that a port listens and never guesses by whom. Lets InfraNest compare a firewall's open ports with what actually listens behind them. `INFRANEST_LISTENING=0` turns it off; not collected on Windows |
 | **Cron jobs** | what cron runs here: `/etc/crontab`, `/etc/cron.d/*` and the scripts in `/etc/cron.hourly`, `daily`, `weekly` and `monthly` — when each runs, as which user, and the name of the program it runs. **The command itself only with `INFRANEST_PROCESS_ARGS`**: cron lines are where people put passwords. Your users' own crontabs (`crontab -e`, `/var/spool/cron`) are readable by root alone and are **never opened** — the agent does not run as root. Read again only when a file changes. `INFRANEST_CRON=0` turns it off; Linux only |
+| **Why a service failed** | **Off until you turn it on.** With it, a service that fails, is killed for memory or starts restarting in a loop sends **its last 20 lines from the system log**, once, masked like a failed job's output — and every hour, **how many errors and warnings each unit logged**. Never the log itself. Turned on by letting the agent's user read the journal — see [Reading the system log](#reading-the-system-log-when-something-fails). `INFRANEST_JOURNAL=0` keeps it off even then; Linux only |
 | **Containers** | Docker and Podman containers that are running, how much memory each is using, and **how often each has restarted**: a container in a restart loop is `Up` every time anyone looks. Read from the scope units systemd keeps for each container, over the same D-Bus connection as the services above — **never from the Docker socket**, which is root on the host. The cost is that containers are known by their short ID, not their name — so **what runs in each** is sent instead: the container's main process, the first one in its world-readable `cgroup.procs` (past an init shim such as tini), by its name; its command line only when command lines are switched on. And **the ports Docker publishes for it**, read from the command lines of Docker's `docker-proxy` processes, which hold nothing but addresses and port numbers: only those five flags are read, in memory, and the command line itself is never sent. With Docker's userland proxy switched off no process says which port goes where, and none is reported. Hosts on Docker's older `cgroupfs` driver have no such units and report none |
 
 A failed unit is worth its own line here because it is the failure that moves no number: a backup timer
@@ -370,18 +371,41 @@ read and execute access to that directory — bearing in mind that Docker protec
 `/var/lib/docker` as well, so the top one alone is usually not enough. Nothing here needs the agent to run
 as root, and nothing here ever will.
 
-There is a second thing it cannot see, and this one is deliberate rather than a consequence of privilege:
-**it sends no log output.** When a unit fails you get systemd's own word for why — `oom-kill`, `timeout`,
-`exit-code`, `start-limit-hit` — and the exit status that went with it, but never a line the service
-printed.
+There is a second thing it cannot see unless you say so: **the system log.** When a unit fails you always get
+systemd's own word for why — `oom-kill`, `timeout`, `exit-code`, `start-limit-hit` — and the exit status that went
+with it. A line the service printed is sent only after you let the agent read the journal (below), and then only
+a failed or looping service's last few, masked.
 
-That is not a limitation waiting to be lifted. Service logs routinely carry credentials: a connection
-string in a startup error, a token in a failed request, a password that ended up in an argv. Shipping them
-here would mean choosing a truncation that cuts the line that mattered, writing a redaction pass that
-cannot know what a secret looks like in an arbitrary program's output, and storing the remainder in a
-database. The failure reason answers the question that log line was going to be read for, in a form a rule
-can act on and a person can read in any language, and it cannot leak anything, because it is one word from
-a list systemd chose from.
+#### Reading the system log when something fails
+
+journald's files can be read by the `systemd-journal` group and by root. The agent is in neither, so out of the box
+it cannot read them, and InfraNest can say *that* a service failed but not *why*. To let it:
+
+```
+sudo usermod -aG systemd-journal infranest-agent && sudo systemctl restart infranest-agent
+```
+
+and to undo it:
+
+```
+sudo gpasswd -d infranest-agent systemd-journal && sudo systemctl restart infranest-agent
+```
+
+- **No root.** The group can read the system log and nothing else: no capability, no command, nothing written.
+  The unit's restrictions are unchanged. InfraNest notices on the next push and says so on the server's System tab.
+- **What leaves**: when a service fails, is killed for memory or restarts three times in a day, its last 20 lines
+  from the hour before, at info priority or more urgent, once — with anything shaped like a password, token or key
+  masked, the same rules as a failed job's output, and masked again when it arrives. Every hour, a count of each
+  unit's errors and warnings. **Never the log itself**, never a line from a service that did not fail, never debug
+  lines, never a user's own journal.
+- **The honest cost**: the group can read *all* of the system log, which may name users or file paths. That is why
+  the installer does not do this for you.
+- The agent reads the journal files itself with a small reader of their documented format — it does not run
+  `journalctl`, and links nothing. A line journald stored compressed (over 512 bytes) is skipped and counted, not
+  read.
+
+Some distributions give `adm` or `wheel` the same access through an ACL on the files; any of them works. Searching
+logs is a different job: point a log tool at the journal for that.
 
 A third: **it cannot say which program owns a listening port.** The kernel's socket tables say that
 something listens on 5432 and on which address; which process holds that socket is recorded only under
@@ -463,6 +487,7 @@ All optional except the token, and all set for you by the installer.
 | `INFRANEST_RENEWERS` | report what renews certificates here (certbot, Caddy, Traefik) and its last run. **On** by default |
 | `INFRANEST_LISTENING` | report listening ports and how many distinct peers are connected to each, by class — never their addresses. **On** by default |
 | `INFRANEST_CRON` | list the jobs in `/etc/crontab`, `/etc/cron.d` and the run-parts folders. **On** by default |
+| `INFRANEST_JOURNAL` | read a failed service's last lines and the hourly error counts from the system log, **once you have let the agent read it** (see above). On by default, and does nothing until then; `0` keeps it off even with the group |
 | `INFRANEST_JOBS_DIR` | where `run --job` reports and the agent reads them. Default `/var/spool/infranest-agent` |
 
 `INFRANEST_URL` must be `https`. The token is a bearer credential and this is the wire it crosses; there

@@ -131,10 +131,10 @@ func New(token, version string) *Client {
 }
 
 // Send posts a batch of readings and reports what the server did with them.
-func (c *Client) Send(ctx context.Context, url string, samples []json.RawMessage, failed map[string]string, usage any, jobRuns any, collectors Collectors) (Result, error) {
+func (c *Client) Send(ctx context.Context, url string, samples []json.RawMessage, failed map[string]string, usage any, jobRuns any, journal any, collectors Collectors) (Result, error) {
 	var result Result
 
-	body, err := encode(samples, failed, c.Version, usage, jobRuns, collectors)
+	body, err := encode(samples, failed, c.Version, usage, jobRuns, journal, collectors)
 	if err != nil {
 		return result, err
 	}
@@ -212,7 +212,7 @@ func (c *Client) Send(ctx context.Context, url string, samples []json.RawMessage
 // `samples` are already-marshalled readings straight from the spool, so a reading is written once when it
 // is collected and never re-encoded — which is also what keeps a reading that was collected by an older
 // version of the agent sendable by a newer one.
-func encode(samples []json.RawMessage, failed map[string]string, version string, usage any, jobRuns any, collectors Collectors) ([]byte, error) {
+func encode(samples []json.RawMessage, failed map[string]string, version string, usage any, jobRuns any, journal any, collectors Collectors) ([]byte, error) {
 	payload := struct {
 		Samples      []json.RawMessage `json:"samples"`
 		Failed       map[string]string `json:"failed,omitempty"`
@@ -228,7 +228,10 @@ func encode(samples []json.RawMessage, failed map[string]string, version string,
 		// What `infranest-agent run --job` reported since the last push (InfraNest #5801). Events, not a snapshot:
 		// each is sent until a push carrying it is answered, then deleted, and InfraNest keeps one per ID.
 		JobRuns any `json:"job_runs,omitempty"`
-	}{Samples: samples, Failed: failed, AgentVersion: version, Collectors: collectors, DiskUsage: usage, JobRuns: jobRuns}
+		// Whether the system journal is read here, on every push from Linux, and a unit's last lines or the hourly
+		// counts on the push that follows them (InfraNest #5848). Absent on every other system.
+		Journal any `json:"journal,omitempty"`
+	}{Samples: samples, Failed: failed, AgentVersion: version, Collectors: collectors, DiskUsage: usage, JobRuns: jobRuns, Journal: journal}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
