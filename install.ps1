@@ -7,7 +7,8 @@
     boot. PowerShell does the installing; the agent itself is a single Go binary with no dependencies and
     no PowerShell involved once it is running.
 
-    The agent only sends. It takes no instructions, runs no commands, and opens no ports.
+    The agent only sends data. It can't be given instructions, opens no ports, and never runs anything by
+    itself.
 
 .EXAMPLE
     .\install.ps1 -Token sat_xxxxx

@@ -23,14 +23,13 @@
 The [InfraNest](https://infranest.io) monitoring agent. It reads a handful of numbers from the machine it
 runs on and posts them to your InfraNest account.
 
-It takes no instructions, executes nothing, and opens no ports: there is no listening socket and no remote
-command channel. CI checks that mechanically on every commit — see
+The agent only sends data. It can't be given instructions, opens no ports, and never runs anything by
+itself: there is no listening socket and no remote command channel. CI checks that on every commit — see
 [the invariant job](.github/workflows/ci.yml).
 
-One command starts a process, and it is not the service: [`infranest-agent run --job`](#watching-a-cron-job),
-which you put in front of your own cron command so InfraNest hears whether the job worked. It runs that command
-and nothing else, as the user your crontab already runs it as. CI checks that nothing the service is built from
-can reach it.
+The one exception is [`infranest-agent run`](#watching-a-cron-job): you can put it in front of your own cron
+job so InfraNest hears whether the job worked. It runs only that command, as the same user as before, and the
+agent service itself can never use it — CI checks that too.
 
 The one thing the server can influence is **where the next reading goes**. A reply may name a different
 ingest URL, and the agent adopts it only if it is HTTPS and on the same registrable domain — so it can be

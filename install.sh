@@ -57,7 +57,8 @@ Options:
   --uninstall            remove the agent, its user, its config and its data
   --help                 show this
 
-The agent only sends. It takes no instructions, runs no commands, and opens no ports.
+The agent only sends data. It can't be given instructions, opens no ports, and never runs anything by
+itself. The one exception is 'infranest-agent run', which you can put in front of your own cron job.
 USAGE
 }
 
