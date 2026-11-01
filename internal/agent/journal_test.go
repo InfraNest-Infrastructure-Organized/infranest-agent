@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"encoding/json"
 	"errors"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -194,5 +196,52 @@ func TestThereIsNoJournalOffLinux(t *testing.T) {
 		if j != nil {
 			t.Fatalf("journal on %s: %#v", runtime.GOOS, j)
 		}
+	}
+}
+
+// A login service that fails is told about — that it failed, and how — with no lines, and its lines are never read:
+// they are records of who logged in, from where (InfraNest #5859).
+func TestALoginServicesEventCarriesNoLinesAndSaysWhy(t *testing.T) {
+	failedAt := time.Date(2026, 8, 25, 11, 58, 0, 0, time.UTC)
+	h := &journalHarness{readable: true, reason: journal.ReasonOK}
+	sender := &fakeSender{}
+	harnessWith(t, sender, 3, func(r *Runner) {
+		h.install(r, func(int) []collect.Service {
+			return []collect.Service{
+				failedUnit("ssh.service", failedAt, "exit-code"),
+				failedUnit("sshd@3-10.0.0.1:22-203.0.113.7:51234.service", failedAt, "exit-code"),
+				failedUnit("nginx.service", failedAt, "exit-code"),
+			}
+		})
+	})
+	var events []journalEvent
+	for _, p := range payloads(t, sender) {
+		events = append(events, p.Events...)
+	}
+	if len(events) != 3 {
+		t.Fatalf("want three events, got %+v", events)
+	}
+	if len(h.reads) != 1 || h.reads[0] != "nginx.service" {
+		t.Fatalf("only nginx's lines may be read, read %v", h.reads)
+	}
+	for _, e := range events {
+		login := e.Unit != "nginx.service"
+		if login && (e.LinesWithheld != journal.WithheldLogin || len(e.Lines) != 0 || e.Lines == nil || e.Event != eventFailed) {
+			t.Errorf("a login service: %+v", e)
+		}
+		if !login && (e.LinesWithheld != "" || len(e.Lines) != 1) {
+			t.Errorf("an ordinary service: %+v", e)
+		}
+		b, _ := json.Marshal(e)
+		if login != strings.Contains(string(b), `"lines_withheld":"login"`) || login != strings.Contains(string(b), `"lines":[]`) {
+			t.Errorf("on the wire: %s", b)
+		}
+		// A per-connection instance is named after its peer; it is sent as its template.
+		if strings.Contains(string(b), "203.0.113.7") {
+			t.Errorf("the peer's address left in the unit's name: %s", b)
+		}
+	}
+	if events[1].Unit != "sshd@.service" {
+		t.Errorf("the instance is sent as %q, want sshd@.service", events[1].Unit)
 	}
 }

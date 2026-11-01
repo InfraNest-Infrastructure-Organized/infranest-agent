@@ -74,6 +74,12 @@ type Entry struct {
 	Unit string
 	// 0 (emerg) to 7 (debug); -1 when the entry has none.
 	Priority int
+	// syslog's facility (`SYSLOG_FACILITY`), -1 when the entry has none: 4 is auth, 10 authpriv.
+	Facility int
+	// `SYSLOG_IDENTIFIER`: the program that wrote it, as it named itself.
+	Identifier string
+	// `_TRANSPORT`: how journald received it — `audit` for the kernel's audit records.
+	Transport string
 	// Where the message's payload is, so it is read only for the entries a caller keeps.
 	message, messageLen int64
 	// The entry had a field this reader could not read because it is compressed — its message, when no message was
@@ -107,6 +113,9 @@ const (
 	kindPriority
 	kindMessage
 	kindCompressed
+	kindFacility   // SYSLOG_FACILITY
+	kindIdentifier // SYSLOG_IDENTIFIER
+	kindTransport  // _TRANSPORT
 )
 
 type field struct {
@@ -270,7 +279,7 @@ func (f *File) entry(off int64) (Entry, bool) {
 	if err != nil {
 		return Entry{}, false
 	}
-	e := Entry{At: time.UnixMicro(int64(binary.LittleEndian.Uint64(b[24:]))).UTC(), Priority: -1}
+	e := Entry{At: time.UnixMicro(int64(binary.LittleEndian.Uint64(b[24:]))).UTC(), Priority: -1, Facility: -1}
 
 	item := int64(16)
 	if f.compact {
@@ -303,6 +312,14 @@ func (f *File) entry(off int64) (Entry, bool) {
 			if p, err := strconv.Atoi(fd.value); err == nil && p >= 0 && p <= 7 {
 				e.Priority = p
 			}
+		case kindFacility:
+			if v, err := strconv.Atoi(fd.value); err == nil && v >= 0 && v <= 23 {
+				e.Facility = v
+			}
+		case kindIdentifier:
+			e.Identifier = fd.value
+		case kindTransport:
+			e.Transport = fd.value
 		case kindMessage:
 			e.message, e.messageLen = fd.at, fd.length
 		case kindCompressed:
@@ -373,6 +390,12 @@ func (f *File) readData(off int64) field {
 		kind = kindAbout
 	case "PRIORITY":
 		kind = kindPriority
+	case "SYSLOG_FACILITY":
+		kind = kindFacility
+	case "SYSLOG_IDENTIFIER":
+		kind = kindIdentifier
+	case "_TRANSPORT":
+		kind = kindTransport
 	case "MESSAGE":
 		return field{kind: kindMessage, at: valueAt, length: valueLen}
 	default:

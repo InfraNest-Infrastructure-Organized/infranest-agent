@@ -45,6 +45,8 @@ type journalEvent struct {
 	Compressed int `json:"compressed,omitempty"`
 	// A line was cut, or the oldest were left out to stay within the budget.
 	Truncated bool `json:"truncated,omitempty"`
+	// Why `lines` is empty on purpose: `login` for a login service, whose lines are never read (InfraNest #5859).
+	LinesWithheld string `json:"lines_withheld,omitempty"`
 }
 
 // journalPayload is `journal` in the push: on every push from Linux, whether the journal is read; the events and the
@@ -212,12 +214,18 @@ func (r *Runner) observeJournal(services []collect.Service) {
 		if i >= maxJournalReadsPerTick {
 			break
 		}
-		s := r.journalLines(d.unit, d.at.Add(-journalLookBack), d.at.Add(time.Minute))
+		// A login service's lines are records of who logged in: its event is sent, its lines are not even read.
+		var s journal.Snippet
+		if journal.LoginUnit(d.unit) {
+			s = journal.Snippet{Withheld: journal.WithheldLogin}
+		} else {
+			s = r.journalLines(d.unit, d.at.Add(-journalLookBack), d.at.Add(time.Minute))
+		}
 		lines := s.Lines
 		if lines == nil {
 			lines = []journal.Line{}
 		}
-		w.events = append(w.events, journalEvent{Unit: d.unit, Event: d.event, At: d.at, Lines: lines, Compressed: s.Compressed, Truncated: s.Truncated})
+		w.events = append(w.events, journalEvent{Unit: journal.ReportedUnit(d.unit), Event: d.event, At: d.at, Lines: lines, Compressed: s.Compressed, Truncated: s.Truncated, LinesWithheld: s.Withheld})
 	}
 	if len(w.events) > maxJournalEvents {
 		w.events = w.events[len(w.events)-maxJournalEvents:]
