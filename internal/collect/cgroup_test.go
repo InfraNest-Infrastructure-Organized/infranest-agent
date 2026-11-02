@@ -13,6 +13,9 @@ func TestACgroupNamesTheServiceOrContainerAProcessBelongsTo(t *testing.T) {
 		{"docker, cgroupfs driver, v1", "12:pids:/docker/" + id + "\n11:memory:/docker/" + id + "\n", "", "4f1c8a9b2d3e"},
 		{"a login session is neither", "0::/user.slice/user-1000.slice/session-3.scope\n", "", ""},
 		{"a kernel thread has the root cgroup", "0::/\n", "", ""},
+		// Socket-activated sshd (InfraNest #5864): the instance is named after the peer, so it is sent as its template.
+		{"a login connection's instance", "0::/system.slice/system-sshd.slice/sshd@3-10.0.0.1:22-203.0.113.7:51234.service\n", "sshd@.service", ""},
+		{"an ordinary instance keeps its name", "0::/system.slice/system-postgresql.slice/postgresql@16-main.service\n", "postgresql@16-main.service", ""},
 	}
 	for _, c := range cases {
 		unit, container := parseCgroupOwner(c.body)

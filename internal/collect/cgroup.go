@@ -3,6 +3,8 @@ package collect
 import (
 	"encoding/hex"
 	"strings"
+
+	"github.com/InfraNest-Infrastructure-Organized/infranest-agent/internal/loginunit"
 )
 
 // parseCgroupOwner names what a process belongs to from its /proc/<pid>/cgroup (InfraNest #4917): the
@@ -26,7 +28,9 @@ func parseCgroupOwner(body string) (unit string, containerID string) {
 			case i > 0 && segments[i-1] == "docker" && isHex(seg):
 				return "", shortID(seg) // the cgroupfs driver: /docker/<id>
 			case strings.HasSuffix(seg, ".service"):
-				return clip(seg, maxUnit), ""
+				// A login service's per-connection instance is named after the peer (InfraNest #5864): its
+				// processes are sshd's all the same, so they are reported under its template, `sshd@.service`.
+				return clip(loginunit.Reported(seg), maxUnit), ""
 			}
 		}
 	}
