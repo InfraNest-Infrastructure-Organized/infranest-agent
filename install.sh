@@ -57,8 +57,8 @@ Options:
   --uninstall            remove the agent, its user, its config and its data
   --help                 show this
 
-The agent only sends data. It can't be given instructions, opens no ports, and never runs anything by
-itself. The one exception is 'infranest-agent run', which you can put in front of your own cron job.
+The agent only reads, and only sends: it changes nothing on this server. It can't be given instructions,
+opens no ports, and never runs anything by itself. The one exception is 'infranest-agent run', which you can put in front of your own cron job.
 
 The download is checked against its sha256, and — when gh or cosign is installed — against the release's
 build attestation. To check a release yourself first, with cosign:
