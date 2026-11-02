@@ -23,7 +23,8 @@
 The [InfraNest](https://infranest.io) monitoring agent. It reads a handful of numbers from the machine it
 runs on and posts them to your InfraNest account.
 
-The agent only sends data. It can't be given instructions, opens no ports, and never runs anything by
+**The agent only reads, and only sends.** It reads what your server page needs, sends that to InfraNest, and
+changes nothing on your server. It can't be given instructions, opens no ports, and never runs anything by
 itself: there is no listening socket and no remote command channel. CI checks that on every commit — see
 [the invariant job](.github/workflows/ci.yml).
 

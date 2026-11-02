@@ -7,8 +7,8 @@
     boot. PowerShell does the installing; the agent itself is a single Go binary with no dependencies and
     no PowerShell involved once it is running.
 
-    The agent only sends data. It can't be given instructions, opens no ports, and never runs anything by
-    itself.
+    The agent only reads, and only sends: it changes nothing on this server. It can't be given instructions,
+    opens no ports, and never runs anything by itself.
 
 .EXAMPLE
     .\install.ps1 -Token sat_xxxxx
@@ -417,7 +417,7 @@ try {
 
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
         -Principal $principal -Settings $settings `
-        -Description 'Collects CPU, memory, disk and load and sends them to InfraNest. It only sends.' | Out-Null
+        -Description 'Collects CPU, memory, disk and load and sends them to InfraNest. It only reads, and only sends.' | Out-Null
 
     # LOCAL SERVICE, not SYSTEM: it is the least-privileged account that still has network access, and
     # nothing the agent reads needs more than that.
