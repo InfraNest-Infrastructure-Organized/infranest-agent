@@ -8,21 +8,24 @@ on:
     tags:
       - 'v*'
 
+# Read-only by default. Only the publish job can sign or write, and it builds nothing: what it signs was
+# built by a job that could not sign, and rebuilt by another that could not either (InfraNest #5969).
 permissions:
-  contents: write
-  # What keyless signing needs, and the reason it needs no key: `id-token` lets this job prove to
-  # Sigstore that it is this workflow in this repository, and a short-lived certificate is issued
-  # against that. There is nothing stored to leak, and nothing for a repository compromise to steal that
-  # it did not already have.
-  id-token: write
-  attestations: write
+  contents: read
 
 jobs:
   build:
-    name: Build, verify reproducible, publish
+    name: Check and build
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.what.outputs.version }}
+      commit: ${{ steps.what.outputs.commit }}
+      epoch: ${{ steps.what.outputs.epoch }}
+      date: ${{ steps.what.outputs.date }}
+      goversion: ${{ steps.what.outputs.goversion }}
+      gonumber: ${{ steps.what.outputs.gonumber }}
     steps:
-      # Actions pinned by digest, not by tag — the same as ci.yml, and it matters more here. This job
+      # Actions pinned by digest, not by tag — the same as ci.yml, and it matters more here. This workflow
       # produces the binaries customers install as a system service; a moved tag on a third-party action
       # would inject straight into them, which is the supply-chain shape #782 exists to prevent. A
       # floating tag in a release pipeline is the one place it is least defensible.
@@ -30,6 +33,7 @@ jobs:
         with:
           # The build stamps the commit, and a shallow clone cannot describe one.
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -37,10 +41,16 @@ jobs:
           # go.mod says 1.24 — and a release pipeline that cannot run is discovered at the worst moment.
           go-version-file: go.mod
           check-latest: true
+          # No restored build or module cache (InfraNest #5969). setup-go would otherwise restore what
+          # earlier runs on the default branch saved, and compiled objects from a cache are linked without
+          # being rebuilt — so the attestation would vouch for this workflow while the binary carried
+          # whatever the cache held, and anything that ever ran code in a default-branch workflow could
+          # have put it there. A release is built from the source alone; it costs a minute.
+          cache: false
 
       # Everything downstream reads these, so they are computed once. SOURCE_DATE_EPOCH comes from the
       # *commit*, never from `now`: a build stamped with the wall clock is a build that cannot be
-      # reproduced, which would quietly cost the property this whole job exists to provide.
+      # reproduced, which would quietly cost the property this whole workflow exists to provide.
       - name: Establish what is being built
         id: what
         run: |
@@ -50,8 +60,10 @@ jobs:
           echo "date=$(git log -1 --date=format:%Y-%m-%d --pretty=%cd)" >> "$GITHUB_OUTPUT"
           # Published with the release, because "rebuild it and compare" does not work without it:
           # compiler output changes between Go versions, so a verifier on a different toolchain gets a
-          # different hash and no way to tell a version difference from a tampered binary.
+          # different hash and no way to tell a version difference from a tampered binary. The rebuild
+          # job below uses exactly this one for the same reason.
           echo "goversion=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+          echo "gonumber=$(go env GOVERSION | sed 's/^go//')" >> "$GITHUB_OUTPUT"
 
       # The same invariants CI enforces on every push, re-run here rather than trusted.
       #
@@ -73,57 +85,116 @@ jobs:
       - name: Test
         run: go test ./...
 
-      # `-trimpath` removes the build machine's directory layout from the binary, and CGO_ENABLED=0 means
-      # no libc is linked in. Together with a fixed SOURCE_DATE_EPOCH they are what make the output a
-      # function of the source alone — which is the difference between "trust our release" and "check it
-      # yourself".
       - name: Build every target
         env:
-          CGO_ENABLED: "0"
+          VERSION: ${{ steps.what.outputs.version }}
+          COMMIT: ${{ steps.what.outputs.commit }}
+          DATE: ${{ steps.what.outputs.date }}
           SOURCE_DATE_EPOCH: ${{ steps.what.outputs.epoch }}
         run: |
-          mkdir -p dist
-          ldflags="-s -w \
-            -X main.version=${{ steps.what.outputs.version }} \
-            -X main.commit=${{ steps.what.outputs.commit }} \
-            -X main.date=${{ steps.what.outputs.date }}"
-
-          # Only the platforms that collect something (InfraNest #3838). macOS and FreeBSD still build in
-          # CI on every commit, so the compiler keeps seeing that code; publishing a binary that installs
-          # and then reports nothing read as a broken product rather than an unsupported platform.
-          for target in \
-            linux/amd64 linux/arm64 linux/arm linux/386 linux/riscv64 linux/ppc64le linux/s390x \
-            windows/amd64 windows/arm64; do
-            os=${target%/*}; arch=${target#*/}
-            out="dist/infranest-agent_${os}_${arch}"
-            [ "$os" = "windows" ] && out="${out}.exe"
-            GOOS=$os GOARCH=$arch go build -trimpath -ldflags "$ldflags" -o "$out" ./cmd/infranest-agent
-            echo "  built $out"
-          done
-
-      # Built twice, compared. A reproducibility claim nobody tests is a reproducibility claim that is
-      # false the first time a build input sneaks in — and the failure is silent, because a
-      # non-reproducible binary works perfectly. It just cannot be verified by anyone.
-      - name: Prove the build is reproducible
-        env:
-          CGO_ENABLED: "0"
-          SOURCE_DATE_EPOCH: ${{ steps.what.outputs.epoch }}
-        run: |
-          ldflags="-s -w \
-            -X main.version=${{ steps.what.outputs.version }} \
-            -X main.commit=${{ steps.what.outputs.commit }} \
-            -X main.date=${{ steps.what.outputs.date }}"
-
-          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$ldflags" -o /tmp/again ./cmd/infranest-agent
-          if ! cmp -s /tmp/again dist/infranest-agent_linux_amd64; then
-            echo "::error::two builds of the same commit differ — the build is not reproducible"
-            exit 1
+          # Go stamps whether the tree was modified into the binary, so a file the tests left behind would
+          # make this build differ from a clean checkout's — the rebuild below, or anyone's.
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::the working tree is not clean before the build"; git status --porcelain; exit 1
           fi
-          echo "  identical on a second build"
+          scripts/build-release.sh dist
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: binaries
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Built again, somewhere else, and compared (InfraNest #5969). A reproducibility claim nobody tests is
+  # false the first time a build input sneaks in — and the failure is silent, because a non-reproducible
+  # binary works perfectly. It just cannot be verified by anyone.
+  #
+  # A separate job, not a second build in the first one: that would share its toolchain, its build cache
+  # and its working tree, so whatever got into the first build would get into the second, and the
+  # comparison would agree with it. A fresh runner shares nothing with the build but the commit and the Go
+  # version, which is exactly what anyone rebuilding a release from the notes has.
+  reproduce:
+    name: Rebuild on a clean runner and compare
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # The build's exact toolchain, not go.mod's "latest 1.24": a patch release between the two jobs
+          # would make every binary differ for a reason that is not a problem.
+          go-version: ${{ needs.build.outputs.gonumber }}
+          cache: false
+
+      - name: Rebuild every target
+        env:
+          GOVERSION: ${{ needs.build.outputs.goversion }}
+          VERSION: ${{ needs.build.outputs.version }}
+          COMMIT: ${{ needs.build.outputs.commit }}
+          DATE: ${{ needs.build.outputs.date }}
+          SOURCE_DATE_EPOCH: ${{ needs.build.outputs.epoch }}
+        run: |
+          [ "$(go env GOVERSION)" = "$GOVERSION" ] \
+            || { echo "::error::this runner has $(go env GOVERSION), the build used $GOVERSION"; exit 1; }
+          [ "$(git rev-parse HEAD)" = "$COMMIT" ] \
+            || { echo "::error::checked out $(git rev-parse HEAD), the build was of $COMMIT"; exit 1; }
+          scripts/build-release.sh dist
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: binaries
+          path: ${{ runner.temp }}/built
+
+      - name: Every binary is the same, byte for byte
+        env:
+          BUILT: ${{ runner.temp }}/built
+        run: |
+          fail=0
+          list() { (cd "$1" && printf '%s\n' * | sort); }
+          [ "$(list "$BUILT")" = "$(list dist)" ] \
+            || { echo "::error::the two builds produced different files"; diff <(list "$BUILT") <(list dist); fail=1; }
+          for f in dist/*; do
+            name=${f#dist/}
+            if cmp -s "$f" "$BUILT/$name"; then
+              echo "  identical  $name  $(sha256sum "$f" | cut -d' ' -f1)"
+            else
+              echo "::error::$name differs: $(sha256sum "$BUILT/$name" | cut -d' ' -f1) built, $(sha256sum "$f" | cut -d' ' -f1) rebuilt"
+              fail=1
+            fi
+          done
+          exit $fail
+
+  publish:
+    name: Attest and publish
+    needs: [build, reproduce]
+    runs-on: ubuntu-latest
+    permissions:
+      # To create the release and upload its assets.
+      contents: write
+      # What keyless signing needs, and the reason it needs no key: `id-token` lets this job prove to
+      # Sigstore that it is this workflow in this repository, and a short-lived certificate is issued
+      # against that. There is nothing stored to leak, and nothing for a repository compromise to steal
+      # that it did not already have.
+      id-token: write
+      # To record the attestation with GitHub, which is what `gh attestation verify` without --bundle reads.
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The bytes the build job made and the rebuild job matched. Nothing is compiled here.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: binaries
+          path: dist
 
       # One file per artifact, because that is what install.sh fetches, plus a single manifest for anyone
-      # verifying the set. The manifest is also what a signature will cover when #782's key decision is
-      # made — signing one file rather than twelve.
+      # verifying the set.
       # The installers ship *with* the release, which is what lets get.infranest.io redirect to
       # `/releases/latest/download/` and never need editing again. Pinning a tag in the redirect would
       # mean a config change on somebody else's server every time we release, and a release nobody
@@ -151,6 +222,10 @@ jobs:
       #
       # Chosen over `cosign` directly because customers verify with `gh attestation verify`, and asking
       # somebody to install a large third-party binary to check a zero-dependency agent is an odd shape.
+      # The agent itself checks it too (`infranest-agent verify`), which is what most servers rely on.
+      #
+      # The installers are attested as well as the binaries (InfraNest #5969): `infranest-agent upgrade`
+      # runs nothing it has not checked, and the installer is what an upgrade runs as root.
       #
       # It proves *who built this*. It does not prove the source is good — the reproducible build above
       # is what answers that, and it needs no third party at all. The release notes say so in that order.
@@ -158,7 +233,10 @@ jobs:
         id: attest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: 'dist/infranest-agent_*'
+          subject-path: |
+            dist/infranest-agent_*
+            dist/install.sh
+            dist/install.ps1
 
       # The same attestation, published as a release asset (InfraNest#2361). The installers verify it when
       # gh or cosign is present, and a file beside the binary is something they can fetch from either
@@ -175,12 +253,51 @@ jobs:
           test -s "$BUNDLE" || { echo "::error::the attest step produced no bundle"; exit 1; }
           cp "$BUNDLE" dist/infranest-agent.sigstore.json
 
+      # Before anything is published: can the agents that will check this release actually check it?
+      #
+      # The agent verifies attestations with Sigstore's trust anchors compiled in, and refuses a format it
+      # does not know rather than half-checking it. So the day Sigstore rotates a key, or GitHub's attest
+      # action starts writing a new kind of log entry, every installed agent would refuse every upgrade —
+      # safely, but with nobody told. This is where it is told: by this release's own verifier, which
+      # every later upgrade from it will use, and by the previous release's, which is what agents in the
+      # field will run against this one. Fails the release rather than shipping one they cannot install.
+      - name: The agents that will check this release can check it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.build.outputs.version }}
+        run: |
+          set -eu
+          check() {
+            for f in dist/infranest-agent_linux_amd64 dist/infranest-agent_windows_amd64.exe dist/install.sh; do
+              "$1" verify --bundle dist/infranest-agent.sigstore.json --tag "$TAG" "$f" || return 1
+            done
+          }
+
+          cp dist/infranest-agent_linux_amd64 "$RUNNER_TEMP/this-release"
+          chmod +x "$RUNNER_TEMP/this-release"
+          echo "This release's verifier:"
+          check "$RUNNER_TEMP/this-release" \
+            || { echo "::error::this release cannot verify its own attestation, so no upgrade from it could be checked"; exit 1; }
+
+          # The latest release on GitHub — this one is not published yet, so that is the previous one.
+          prev=$(gh release view --json tagName --jq .tagName)
+          gh release download "$prev" --pattern infranest-agent_linux_amd64 --output "$RUNNER_TEMP/previous"
+          chmod +x "$RUNNER_TEMP/previous"
+          if ! "$RUNNER_TEMP/previous" help | grep -q '^  verify '; then
+            echo "::notice::$prev predates infranest-agent verify, so there is no earlier verifier to try"
+            exit 0
+          fi
+          echo "The previous release's verifier ($prev):"
+          check "$RUNNER_TEMP/previous" \
+            || { echo "::error::agents running $prev cannot verify this release, so they would refuse to upgrade to it"; exit 1; }
+
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.what.outputs.version }}
-          GOVERSION: ${{ steps.what.outputs.goversion }}
+          TAG: ${{ needs.build.outputs.version }}
+          GOVERSION: ${{ needs.build.outputs.goversion }}
         run: |
           sed -e "s/__TAG__/${TAG}/g" -e "s/__GOVERSION__/${GOVERSION}/g" \
-            .github/release-notes.md > /tmp/notes.md
-          gh release create "$TAG" dist/* --title "$TAG" --notes-file /tmp/notes.md
+            .github/release-notes.md > "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" dist/* --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"

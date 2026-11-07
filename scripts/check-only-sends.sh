@@ -16,6 +16,12 @@ for os in linux windows darwin freebsd; do
       fail=1
     fi
   done
+  # `upgrade` and `verify` (InfraNest #5969) are commands a person runs; the service never downloads a release or
+  # touches its own binary.
+  if echo "$deps" | grep -qx "$module/internal/upgrade"; then
+    echo "::error::internal/upgrade is in the $os graph of the service. Upgrading is a command a person runs, never the service."
+    fail=1
+  fi
   binary=$(GOOS=$os go list -deps ./cmd/infranest-agent)
   for pkg in net/rpc net/http/cgi net/http/fcgi; do
     if echo "$binary" | grep -qx "$pkg"; then

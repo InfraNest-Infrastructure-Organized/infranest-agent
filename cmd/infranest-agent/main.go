@@ -69,6 +69,14 @@ func run(args []string, stdout, stderr *os.File) error {
 	// is what anyone typing it will expect.
 	command, rest := splitCommand(args)
 
+	// These two take flags of their own, which the shared set would refuse (InfraNest #5969).
+	switch command {
+	case "verify":
+		return verifyCommand(rest, stdout, stderr)
+	case "upgrade":
+		return upgradeCommand(rest, stdout, stderr)
+	}
+
 	if err := fs.Parse(rest); err != nil {
 		// `--help` is someone asking a question, not getting something wrong: answer it on stdout and
 		// exit 0. flag.ErrHelp arrives here after fs.Usage has already printed.
@@ -288,6 +296,9 @@ and the spool both live in the directories above.
 	return nil
 }
 
+// The installers look for the line starting "  verify " here to learn whether the agent already installed
+// can check an upgrade (InfraNest #5969): an older agent answers `verify --help` with its general help and
+// exit 0, so the command itself cannot be the probe. Keep that line's start as it is.
 func usage(w *os.File) {
 	fmt.Fprint(w, `infranest-agent — the InfraNest monitoring agent
 
@@ -305,6 +316,9 @@ Commands:
   status      whether readings are being delivered, and if not, why not
   uninstall   print the exact commands that remove this installation
   flare       a redacted bundle for a support ticket — no token in it
+  upgrade     fetch the latest release's installer, check who built it, and print
+              the command that runs it
+  verify      check a file against a release's build attestation, offline
 
 Flags:
   --version        print version information and exit

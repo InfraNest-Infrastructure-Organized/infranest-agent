@@ -1,5 +1,5 @@
-Built from this tag by GitHub Actions with `CGO_ENABLED=0 -trimpath` and the commit's own timestamp, then
-built a second time and compared byte for byte.
+Built from this tag by GitHub Actions with `CGO_ENABLED=0 -trimpath` and the commit's own timestamp, with
+nothing restored from a build cache, then rebuilt on a separate, clean runner and compared byte for byte.
 
 ## Verify what you are about to run
 
@@ -11,6 +11,14 @@ That checks the download arrived intact. It does **not** prove the release is wh
 binary and the checksum come from the same place, so anyone who could replace one could replace both.
 
 ## Check who built it
+
+With an agent you already have — offline, nothing else to install, no GitHub login:
+
+```
+infranest-agent verify --bundle infranest-agent.sigstore.json --tag __TAG__ infranest-agent_linux_amd64
+```
+
+Or with `gh`:
 
 ```
 gh attestation verify infranest-agent_linux_amd64 \
@@ -29,8 +37,10 @@ cosign verify-blob-attestation --bundle infranest-agent.sigstore.json --new-bund
   infranest-agent_linux_amd64
 ```
 
-The installers run exactly this when either tool is already installed, and refuse to install a binary
-that fails it.
+The installers run this check on every install and upgrade where they can — with the agent already
+installed when there is one, otherwise with `gh` or `cosign` — and refuse to install a binary that fails
+it. The installers themselves are attested too, so `sudo infranest-agent upgrade` can check one before it
+is run.
 
 Every artefact here carries a build attestation: which commit, which workflow, which runner. It is
 signed without a key — a short-lived certificate issued to this workflow and recorded in a public

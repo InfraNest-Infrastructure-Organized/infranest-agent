@@ -20,6 +20,8 @@ USER_NAME="infranest-agent"
 SERVICE="infranest-agent"
 
 VERSION="latest"
+# What was asked for, before `latest` is resolved to a tag.
+VERSION_ASKED="latest"
 TOKEN=""
 TOKEN_FILE=""
 ENROLL_KEY=""
@@ -60,8 +62,13 @@ Options:
 The agent only reads, and only sends: it changes nothing on this server. It can't be given instructions,
 opens no ports, and never runs anything by itself. The one exception is 'infranest-agent run', which you can put in front of your own cron job.
 
-The download is checked against its sha256, and — when gh or cosign is installed — against the release's
-build attestation. To check a release yourself first, with cosign:
+The download is checked against its sha256 and against the release's build attestation. The agent
+already installed checks an upgrade itself; otherwise the attestation is checked when gh or cosign is
+installed. To have the installed agent check this installer too, upgrade with:
+
+  sudo infranest-agent upgrade
+
+To check a release yourself first, with cosign:
 
   cosign verify-blob-attestation --bundle infranest-agent.sigstore.json --new-bundle-format \
     --type slsaprovenance1 --certificate-oidc-issuer https://token.actions.githubusercontent.com \
@@ -138,6 +145,13 @@ fetch() {
 #   - it CANNOT be checked (no gh/cosign, or no attestation to be had) → say so in one line and carry on.
 #     A fresh server has neither tool, and refusing there would fail the install for almost everyone.
 #
+# Except where an agent is already installed that can check it (InfraNest #5969). Then the agent that is
+# here checks what is about to replace it — offline, with the verifier compiled into it — and nothing is
+# installed unless it says yes: not when the release has no attestation, and not when that check fails.
+# The installed binary, never the downloaded one: a binary vouching for itself proves nothing. So once an
+# agent with `verify` is on a machine, every later upgrade or re-install there is checked by it, and trust
+# starts from what is on the machine rather than from gh, cosign or whoever served the download.
+#
 # Pinned to release.yml, not merely to this repository: any workflow here could obtain a certificate, and
 # only one of them builds releases. The attestation cannot be forged by whoever serves the download — it is
 # signed by Sigstore, not by us — so its only weakness is being withheld, which is why it is fetched from
@@ -145,6 +159,12 @@ fetch() {
 WORKFLOW="${REPO}/.github/workflows/release.yml"
 IDENTITY_RE="^https://github\.com/${REPO}/\.github/workflows/release\.yml@refs/tags/v"
 ATTESTATION="infranest-agent.sigstore.json"
+
+# Whether the agent already installed here has `verify`. Read from its usage, not by running `verify`: an
+# agent from before it answers `verify --help` with its general help and exit 0.
+installed_can_verify() {
+  [ -x "${BIN_DIR}/infranest-agent" ] && "${BIN_DIR}/infranest-agent" help 2>/dev/null | grep -q '^  verify '
+}
 
 verify_provenance() {
   bin="$1" bundle="$tmp/attestation.json"
@@ -154,6 +174,22 @@ verify_provenance() {
   # by its digest instead, which only an authenticated gh can do.
   if [ -z "$FROM_FILE" ] && fetch "$ATTESTATION" "$bundle" 2>/dev/null; then
     have_bundle=1
+  fi
+
+  if [ -z "$FROM_FILE" ] && installed_can_verify; then
+    [ "$have_bundle" -eq 1 ] \
+      || die "release ${VERSION} has no build attestation, and the agent installed here does not install what it cannot check."
+    # Moving to the latest never goes backwards: whoever answers "which is latest" can only point at a
+    # genuine release, but an old one with a known bug is still worth refusing. Asked for by name, it is not.
+    set -- "${BIN_DIR}/infranest-agent" verify --bundle "$bundle" --name "$name" --tag "$VERSION"
+    [ "$VERSION_ASKED" = "latest" ] && set -- "$@" --no-downgrade
+    log "verifying who built it (the agent installed here, $("${BIN_DIR}/infranest-agent" --version 2>/dev/null | cut -d' ' -f2))"
+    if ! out="$("$@" "$bin" 2>&1)"; then
+      printf '%s\n' "$out" | sed 's/^/    /' >&2
+      die "the agent installed here refuses this binary. Not installing."
+    fi
+    log "built by ${WORKFLOW}"
+    return 0
   fi
 
   if command -v gh >/dev/null 2>&1 && { [ "$have_bundle" -eq 1 ] || gh auth status >/dev/null 2>&1; }; then
@@ -244,7 +280,7 @@ while [ $# -gt 0 ]; do
     --token-file) need_value "$@"; TOKEN_FILE="$2"; shift 2 ;;
     --enroll)     need_value "$@"; ENROLL_KEY="$2"; shift 2 ;;
     --url)        need_value "$@"; API_URL="$2"; URL_GIVEN=1; shift 2 ;;
-    --version)    need_value "$@"; VERSION="$2"; shift 2 ;;
+    --version)    need_value "$@"; VERSION="$2"; VERSION_ASKED="$2"; shift 2 ;;
     --from)       need_value "$@"; FROM_FILE="$2"; shift 2 ;;
     --processes)  PROCESSES=1; shift ;;
     --upgrade)    DO_UPGRADE=1; shift ;;

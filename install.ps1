@@ -57,6 +57,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# What was asked for, before `latest` is resolved to a tag.
+$VersionAsked = $Version
+
 $Repo        = 'InfraNest-Infrastructure-Organized/infranest-agent'
 $InstallDir  = Join-Path $env:ProgramFiles 'InfraNest'
 $ConfDir     = Join-Path $env:ProgramData 'InfraNest'
@@ -123,8 +126,9 @@ function Save-Asset {
 
 # ── Who built it ─────────────────────────────────────────────────────────────────────────────────────
 # The same rule as install.sh, for the same reasons: the checksum comes from the same place as the binary,
-# so the build attestation is what says who built it. Checked when gh or cosign is already installed,
-# pinned to release.yml. Verification failing stops the install; being unable to check says so and goes on.
+# so the build attestation is what says who built it. Checked by the agent already installed when it can
+# (InfraNest #5969), otherwise when gh or cosign is installed, pinned to release.yml. Verification failing
+# stops the install; being unable to check says so and goes on — unless an installed agent could check.
 $Workflow    = "$Repo/.github/workflows/release.yml"
 $IdentityRe  = "^https://github\.com/$Repo/\.github/workflows/release\.yml@refs/tags/v"
 $Attestation = 'infranest-agent.sigstore.json'
@@ -211,12 +215,40 @@ function Invoke-Enroll {
     return $answer.token
 }
 
+# Whether the agent already installed here has `verify` (InfraNest #5969). Read from its usage, not by running
+# `verify`: an agent from before it answers `verify --help` with its general help and exit code 0.
+function Test-InstalledCanVerify {
+    if (-not (Test-Path $BinPath)) { return $false }
+    if ((Invoke-Native $BinPath @('help')) -ne 0) { return $false }
+    return [bool]($script:NativeOut | Where-Object { $_ -match '^  verify ' })
+}
+
 function Test-Provenance {
     param($bin)
     $bundle = Join-Path $tmp 'attestation.json'
     $haveBundle = $false
     if (-not $From) {
         try { Save-Asset $Attestation $bundle 3>$null; $haveBundle = $true } catch { }
+    }
+
+    # The same rule as install.sh: where an agent that can check is already installed, it checks what is
+    # about to replace it — offline, with the verifier compiled into it — and nothing is installed unless it
+    # says yes. The installed binary, never the downloaded one, which cannot vouch for itself.
+    if (-not $From -and (Test-InstalledCanVerify)) {
+        if (-not $haveBundle) {
+            throw "Release $Version has no build attestation, and the agent installed here does not install what it cannot check."
+        }
+        $argv = @('verify', '--bundle', $bundle, '--name', $name, '--tag', $Version)
+        # Moving to the latest never goes backwards; a release asked for by name may.
+        if ($VersionAsked -eq 'latest') { $argv += '--no-downgrade' }
+        $argv += $bin
+        Write-Step 'verifying who built it (the agent installed here)'
+        if ((Invoke-Native $BinPath $argv) -ne 0) {
+            $script:NativeOut | ForEach-Object { Write-Host "    $_" }
+            throw 'The agent installed here refuses this binary. Not installing.'
+        }
+        Write-Step "built by $Workflow"
+        return
     }
 
     $gh = Get-Command gh -ErrorAction SilentlyContinue
