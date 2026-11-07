@@ -520,6 +520,18 @@ jobs:
             exit 1
           fi
           python3 -c "import json; s=json.load(open('sample.json')); print('collected; system.time_synced =', (s.get('system') or {}).get('time_synced'))"
+          # Which OOM kills were a limit, and which were the agent (InfraNest #5979). The runner is cgroup v2 and
+          # the unit puts the agent in its own slice, so both must be answered here; absent means the reading
+          # is silently nil on every machine like it.
+          python3 - <<'PY'
+          import json, sys
+          s = json.load(open('sample.json')).get('system') or {}
+          print('oom_kills =', s.get('oom_kills'), 'oom_kills_limit =', s.get('oom_kills_limit'), 'oom_kills_agent =', s.get('oom_kills_agent'))
+          missing = [k for k in ('oom_kills', 'oom_kills_limit', 'oom_kills_agent') if k not in s]
+          if missing:
+              print('::error::not reported under the unit on cgroup v2: ' + ', '.join(missing))
+              sys.exit(1)
+          PY
 
       # The README publishes the unit's exposure score (InfraNest #5868): 1.4 on systemd 255, from 1.9 before it.
       # A directive dropped or loosened raises it, and that is a promise quietly broken — so it fails here. The

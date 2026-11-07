@@ -55,7 +55,7 @@ is the first thing documented rather than a debugging flag buried at the bottom.
 | | |
 |---|---|
 | **CPU** | user + system time, as a percentage. Deliberately **not** `100 - idle`, which counts steal (CPU the hypervisor gave another tenant) and iowait — on a shared vCPU those are most of a false alarm, and neither is load this machine can do anything about |
-| **Memory** | used and total, plus swap. "Used" is total minus `MemAvailable`, not minus `MemFree` — counting the page cache as used makes a healthy Linux box look permanently full. Also **how many processes the kernel has killed for lack of memory** since boot: a kill is what frees the memory, so the percentage on the next reading looks healthy, and this counter is the only trace it leaves |
+| **Memory** | used and total, plus swap. "Used" is total minus `MemAvailable`, not minus `MemFree` — counting the page cache as used makes a healthy Linux box look permanently full. Also **how many processes the kernel has killed for lack of memory** since boot: a kill is what frees the memory, so the percentage on the next reading looks healthy, and this counter is the only trace it leaves. Of those kills, **how many were a service or container reaching its own memory limit** rather than the machine running out, and **how many were this agent** reaching its own — from cgroup v2's world-readable `memory.events`, so "a service hit its limit" is not reported as "the server ran out of memory" |
 | **Disk space** | per mount: device, mount point, used, total |
 | **Disk activity** | bytes read and written per second, in total and **per disk**, and how much of the time each disk was busy — from `/proc/diskstats`, whole disks only, so a partition or an LVM volume is not counted a second time. Each mount names the disks it is stored on, read from the kernel's links in `/sys`, so "the backup volume is busy all night while the root disk idles" can be said about the right mount |
 | **What is filling a disk** | at most hourly, and only for the fullest mount: the largest directories, bounded to a minute and to four levels deep. Answers the question the percentage cannot — a disk at 94% is not actionable until you know it is the journal. Directories the agent is not allowed to read are **named**, and the total it did count is sent so the difference from the mount's real usage can be shown as unaccounted for. See [what it cannot see](#what-it-cannot-see) |
@@ -458,7 +458,12 @@ change and fails if the number rises. What is left, and why each stays:
 | `DeviceAllow` (`char-rtc:r`) | Added by `ProtectClock=yes` itself, so the clock can be read and not set |
 | `RootDirectory` | The agent reads the host's own files; a separate root would show it nothing |
 
-The limits are set in the unit too: `MemoryMax=64M`, `CPUQuota=5%`, `TasksMax=32`.
+The limits are set in the unit too: `MemoryHigh=48M`, `MemoryMax=64M`, `CPUQuota=5%`, `TasksMax=32`. Most of what
+counts against the memory limit is not the agent's own (single megabytes) but the kernel's caches of the files it
+looked at — the hourly disk breakdown looks at every file on a mount. Above `MemoryHigh=` the kernel trims those
+caches before the hard limit is near; without it, an allocation the kernel makes inside a filesystem, which may not
+trim them, could meet `MemoryMax=` and have the agent killed (InfraNest #5979). The unit runs in its own slice,
+`system-infranest.slice`, so a kill of the agent survives its restart as a count of its own.
 
 The token lives in `/etc/infranest/agent.conf`, mode 0600, loaded with `EnvironmentFile=` — never
 `Environment=` in the unit, which `systemctl show` exposes to any local user. On Windows the same file
