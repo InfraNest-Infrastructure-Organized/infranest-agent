@@ -498,6 +498,10 @@ ExecStart=/usr/local/bin/infranest-agent run
 EnvironmentFile=/etc/infranest/agent.conf
 Restart=on-failure
 RestartSec=15s
+# Its own slice (InfraNest #5979), and nothing else in it. The service's cgroup is removed on every restart and
+# its memory.events with it, so the kill that caused a restart is gone before the restarted agent can read it;
+# the slice stays for the boot, and its oom_kill is how the agent reports that it was the one killed.
+Slice=system-infranest.slice
 
 # Runs as nobody in particular. CPU, memory, load, mount usage and process names are all readable without
 # privilege, so there is nothing here that needs root — and an agent that needed it would be a much harder
@@ -586,6 +590,15 @@ MemoryDenyWriteExecute=yes
 
 # It cannot become the reason this server falls over. That is the one failure a monitoring agent must not
 # have, so the limits are set here rather than trusted to the program.
+#
+# MemoryHigh= below MemoryMax= (InfraNest #5979). What fills this cgroup is rarely the agent's own heap (single
+# megabytes): it is the kernel's inode and dentry caches, charged to whoever looked the file up, and the hourly
+# "what is filling the disk" walk looks up every file on a mount. Those caches are reclaimable, but not by an
+# allocation made inside a filesystem (GFP_NOFS), which may not call back into one — and when such an allocation
+# meets MemoryMax= the kernel's only remaining move inside a cgroup is the OOM killer. That is how prod-app's agent
+# was killed with 7.7 MB of its own memory. Above MemoryHigh= the kernel reclaims on the way back to user space,
+# where it may shrink those caches, so they are trimmed long before an allocation can meet the hard limit.
+MemoryHigh=48M
 MemoryMax=64M
 CPUQuota=5%
 TasksMax=32

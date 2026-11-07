@@ -55,6 +55,18 @@ type System struct {
 	// keep it (before 4.13, or no /proc), which is not zero: zero is a claim that nothing was killed.
 	OOMKills *uint64 `json:"oom_kills,omitempty"`
 
+	// Of those, how many were a cgroup reaching its own memory limit rather than the machine running out
+	// (InfraNest #5979): the sum of `oom` in the top-level cgroups' memory.events, at most OOMKills. A service
+	// that hit the MemoryMax= it was given is not a server out of memory, and saying so of a machine with 2 GB
+	// free is how this was found. Nil where it cannot be told — cgroup v1, a kernel before 5.2, the hierarchy
+	// mounted with memory_localevents, or a cgroup namespace — which is not zero. See oom.go.
+	OOMKillsLimit *uint64 `json:"oom_kills_limit,omitempty"`
+
+	// How many times this agent's own unit was killed for memory since boot: `oom_kill` of its slice,
+	// system-infranest.slice, which outlives the restarts its service's cgroup does not. Nil when the agent
+	// does not run in that slice (a unit written before it, OpenRC, `print` from a shell).
+	OOMKillsAgent *uint64 `json:"oom_kills_agent,omitempty"`
+
 	// The kernel's random identifier for this boot. Sent beside OOMKills so the receiver can tell a
 	// counter that reset because the machine rebooted from one that did not move — comparing the numbers
 	// alone cannot, since a reboot followed by as many kills as before reads as "no change".
@@ -137,6 +149,11 @@ func CollectSystem() System {
 			s.OOMKills = &n
 		}
 		_ = f.Close()
+	}
+
+	// Only beside a total: both are shares of it, and a receiver judges their rises against its rise.
+	if s.OOMKills != nil {
+		s.OOMKillsLimit, s.OOMKillsAgent = hostOOMPaths.attribute(*s.OOMKills)
 	}
 
 	if v, err := os.ReadFile("/proc/sys/kernel/random/boot_id"); err == nil {
