@@ -130,7 +130,9 @@ curl -fsSL https://get.infranest.io/agent.sh | sudo sh -s -- --token sat_YOUR_TO
 `get.infranest.io` serves this repository's releases, unchanged, over IPv4 **and IPv6** — GitHub has no
 IPv6 address, so a server with only IPv6 cannot download from it directly. The installer fetches the
 binary from there too, and falls back to GitHub if it cannot reach it. Either way it checks the binary
-against the checksum published with the release before installing anything.
+against the checksum published with the release before installing anything — and, once an agent is
+installed, every later upgrade is checked by that agent against the release's build attestation, so the
+download host can withhold an upgrade but not replace one (see [Upgrade it](#upgrade-it)).
 
 Prefer not to pipe a script into a shell? That is a reasonable position — download it, read it, then run it:
 
@@ -174,14 +176,19 @@ adding a second one. The agent itself never sees the key: what it runs with is t
 
 ### Verifying a release before you install it
 
-The installer already refuses to install a binary whose checksum does not match. If `gh` or `cosign` is
-installed, it also checks the release's **build attestation** and refuses a binary our release workflow
-did not build — and when neither is installed it says, in one line, that it could not check.
+The installer already refuses to install a binary whose checksum does not match. It also checks the
+release's **build attestation** and refuses a binary our release workflow did not build: with the agent
+already installed when there is one (it carries its own verifier — see [Upgrade it](#upgrade-it)),
+otherwise with `gh` or `cosign` if either is installed. On a first install with neither, it says, in one
+line, that it could not check.
 
 To do it by hand, each release carries the attestation (`infranest-agent.sigstore.json`) and is
 reproducible:
 
 ```sh
+# Who built it, checked by an agent you already have — offline, no gh, no cosign, no login.
+infranest-agent verify --bundle infranest-agent.sigstore.json --tag v0.24.0 infranest-agent_linux_amd64
+
 # Who built it — which commit, which workflow, which runner. No GitHub login needed with --bundle.
 gh attestation verify infranest-agent_linux_amd64 \
   --repo InfraNest-Infrastructure-Organized/infranest-agent \
@@ -211,8 +218,9 @@ No surprises, in this order:
 
 1. Works out which build fits this machine
 2. Downloads it, and **checks the checksum** — if that does not match it stops and installs nothing
-3. If `gh` or `cosign` is installed, **checks who built it** against the release's attestation — if that
-   fails it stops and installs nothing
+3. **Checks who built it** against the release's attestation — with the agent already installed if there
+   is one, otherwise with `gh` or `cosign` if either is installed. If that fails it stops and installs
+   nothing; an installed agent also refuses a release that has no attestation
 4. Creates a user called `infranest-agent` with no login and no privileges (Windows: uses the built-in
    `LOCAL SERVICE` account)
 5. Puts the token in a file only that user can read
@@ -247,6 +255,29 @@ irm https://get.infranest.io/agent.ps1 -OutFile install.ps1                # Win
 That downloads and verifies the current release exactly as an install does, replaces the binary, and
 restarts the agent. It needs no token, and it does not touch `agent.conf` — whatever you set there stays
 set. Add `--version` (`-Version`) to move to a specific release instead of the latest.
+
+**The agent you already have checks the new one.** Each agent carries a verifier for the release's build
+attestation, with Sigstore's trust anchors compiled in, so the installer has the *installed* agent check
+the binary it downloaded — never the new binary vouching for itself — and installs nothing unless it
+passes: signed by this repository's `release.yml` on that release's tag, on a GitHub-hosted runner,
+recorded in Sigstore's public transparency log, and listing that exact file by its SHA-256. No `gh`, no
+`cosign`, no GitHub login. An upgrade to "latest" never moves to an older release than the one installed;
+`--version` can, on purpose. (Agents from before this check fall back to `gh` or `cosign`, as a first
+install does.)
+
+Piping a script into `sudo sh` still trusts whoever served the script. To take the download host out of
+that too, let the installed agent fetch and check the installer itself:
+
+```sh
+sudo infranest-agent upgrade
+```
+
+It downloads the release's installer and its attestation, checks the installer was built by
+`release.yml` for that release, saves it where only you can change it, and prints the one command that
+runs it — `sudo sh /tmp/infranest-agent-upgrade-…/install.sh --upgrade --version vX.Y.Z`. Everything that
+then runs as root has been checked by the agent that was already on the machine. It does not run the
+installer itself: the agent starts no processes, and you get to see the command before it runs. Linux
+only; on Windows, `install.ps1 -Upgrade` has the installed agent check the binary the same way.
 
 Running the installer again with `--token` is a re-install, not an upgrade: it writes a fresh
 configuration, so process reporting and anything else edited by hand goes back to its default.
@@ -540,6 +571,8 @@ send it in the clear.
 | `infranest-agent status` | whether readings are being delivered, and if not, why not |
 | `infranest-agent flare` | a redacted bundle for a support ticket — the token is never in it |
 | `infranest-agent uninstall` | prints the exact commands that remove this installation — it cannot run them itself, because the agent starts no subprocesses |
+| `infranest-agent upgrade [--version vX.Y.Z]` | fetches a release's installer, checks who built it, and prints the command that runs it — see [Upgrade it](#upgrade-it) |
+| `infranest-agent verify --bundle FILE FILE` | checks a file against a release's build attestation, offline. `--tag` pins the release, `--name` gives the file's name in the release when it was saved under another |
 | `infranest-agent --version` | version, commit, build date |
 
 `status` answers from what is on the machine and reaches nothing. That is deliberate: the question is
@@ -607,6 +640,16 @@ its code, and says it cannot report.
 One destination: your InfraNest ingest host, over HTTPS. Nothing else — no CDN, no analytics, no error
 reporting to a third party. Allowlist that one host and block the rest if you want to.
 
+That is the service. Two things *you* can run reach somewhere else, and only when you run them:
+
+- `infranest-agent upgrade` downloads a release's installer and its attestation from `get.infranest.io`,
+  falling back to `github.com` (and GitHub's release-asset host, `release-assets.githubusercontent.com`,
+  where it redirects). The same hosts the installer uses, and nothing more: checking the attestation needs
+  no network at all, because the Sigstore trust anchors are compiled into the agent rather than fetched.
+- `infranest-agent verify` reaches nothing. It reads two files and answers.
+
+CI fails the build if the service's dependency graph ever includes the upgrade code.
+
 **If that address ever has to change**, you should not have to visit your servers. Two things make that
 true, and neither needs you:
 
@@ -630,8 +673,8 @@ does, and there is no version of it that allows a genuine domain change without 
 
 Two consequences, both ours rather than yours:
 
-- A domain move means re-running the installer on each machine. There is no self-update, so a more
-  permissive agent would only ever reach machines installed *after* it shipped.
+- A domain move means re-running the installer on each machine. There is no automatic self-update, so a
+  more permissive agent would only ever reach machines installed *after* it shipped.
 - We therefore treat the ingest hostname as a permanent commitment, and made the `infranest.app` →
   `infranest.io` move before anyone had the agent installed. If it ever has to happen again, it will be
   announced with a lead time and a command to run, not performed silently.

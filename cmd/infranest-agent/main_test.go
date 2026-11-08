@@ -105,3 +105,39 @@ func TestHelpIsAnAnswerNotAnError(t *testing.T) {
 		t.Errorf("--help does not show the guarantee:\n%s", out)
 	}
 }
+
+// The installers decide whether the agent already installed can check an upgrade by looking for this
+// line in its usage (InfraNest #5969). Losing it would quietly send every upgrade back to "checked only
+// if gh or cosign is installed".
+func TestUsageTellsTheInstallersVerifyIsHere(t *testing.T) {
+	out, err := capture(t, "help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "  verify ") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no line starting %q in the usage:\n%s", "  verify ", out)
+	}
+}
+
+// verify takes its own flags and the file after them, as the installers call it, and a file the
+// attestation does not cover is an error.
+func TestVerifyRefusesAFileTheReleaseDidNotBuild(t *testing.T) {
+	file := t.TempDir() + "/infranest-agent_linux_amd64"
+	if err := os.WriteFile(file, []byte("not the release"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := capture(t, "verify", "--bundle", "../../internal/provenance/testdata/v0.24.0.sigstore.json",
+		"--name", "infranest-agent_linux_amd64", "--tag", "v0.24.0", "--no-downgrade", file)
+	if err == nil || !strings.Contains(err.Error(), "does not verify") {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := capture(t, "verify", file); err == nil {
+		t.Error("verify without --bundle succeeded")
+	}
+}

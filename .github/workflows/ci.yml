@@ -75,6 +75,12 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # To build the agent that is "already installed" in the last step. No cache: nothing here is worth
+      # the speed of one, and a cache this job saves is one a later job could be handed.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
 
       # install.sh downloads from get.infranest.io first and GitHub second (#1791): GitHub has no IPv6
       # address, and some networks allow only github.com. A fallback nobody exercises is a fallback that
@@ -251,6 +257,44 @@ jobs:
           check "signed by ci.yml, cosign"                foreign cosign REFUSED
           check "control: pinned to ci.yml instead, gh"     foreign gh     INSTALLED install-pinned-to-ci.sh
           check "control: pinned to ci.yml instead, cosign" foreign cosign INSTALLED install-pinned-to-ci.sh
+
+      # InfraNest #5969: once an agent that has `verify` is installed, it checks every upgrade itself — with
+      # no gh and no cosign anywhere, which is what almost every server looks like. The same trees as
+      # above, with the agent built from this commit already installed. Each case asserts *who* refused:
+      # the installed agent, not a checksum or a download that failed.
+      - name: An upgrade is checked by the agent already installed, with no gh or cosign
+        run: |
+          set -eu
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o fixtures/installed-agent ./cmd/infranest-agent
+
+          upgrade() {
+            label="$1" tree="$2" want="$3"
+            got=$(docker run --rm -v "$PWD/fixtures:/f:ro" debian:stable-slim sh -c "
+              apt-get update -qq >/dev/null && apt-get install -y -qq curl ca-certificates python3 >/dev/null
+              command -v gh >/dev/null || command -v cosign >/dev/null && { echo 'gh or cosign is here'; exit 1; }
+              mkdir -p /etc/infranest && echo INFRANEST_TOKEN=sat_ci > /etc/infranest/agent.conf
+              install -m 0755 /f/installed-agent /usr/local/bin/infranest-agent
+              before=\$(sha256sum /usr/local/bin/infranest-agent)
+              (cd /f/$tree && python3 -m http.server 8765 --bind 127.0.0.1 >/dev/null 2>&1 &) ; sleep 1
+              sh /f/install.sh --upgrade --version v0.9.1 >/tmp/out 2>&1 || true
+              grep -E '^  (verif|built|  infranest-agent:)|^error' /tmp/out
+              [ \"\$(sha256sum /usr/local/bin/infranest-agent)\" = \"\$before\" ] && echo REFUSED || echo INSTALLED")
+            echo "── $label"; echo "$got"
+            echo "$got" | tail -1 | grep -qx "$want" || { echo "::error::$label: expected $want"; exit 1; }
+            echo "$got" | grep -q 'verifying who built it (the agent installed here' \
+              || { echo "::error::$label: the installed agent did not do the check"; exit 1; }
+            if [ "$want" = REFUSED ]; then
+              echo "$got" | grep -q 'the agent installed here refuses' \
+                || { echo "::error::$label: refused, but not by the installed agent"; exit 1; }
+            fi
+          }
+          upgrade "genuine"  genuine  INSTALLED
+          upgrade "tampered" tampered REFUSED
+          if [ -d fixtures/foreign ]; then
+            upgrade "signed by ci.yml" foreign REFUSED
+          else
+            echo "::notice::the signed-by-another-workflow case was skipped: a fork's pull request cannot sign"
+          fi
 
   collect-windows:
     name: The Windows collectors read a real Windows (InfraNest #3837)
