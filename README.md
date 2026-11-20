@@ -696,7 +696,7 @@ and uptime monitoring in one place, across every provider.
 - **[infranest.io](https://infranest.io/?utm_source=github&utm_medium=readme&utm_campaign=infranest-agent)** — what the platform does
 - **[infranest.io/docs](https://infranest.io/docs/?utm_source=github&utm_medium=readme&utm_campaign=infranest-agent)** — documentation and help centre
 - **[app.infranest.io](https://app.infranest.io)** — sign in
-- **[developers.infranest.io](https://developers.infranest.io)** — the API, to read your servers and their metrics from your own scripts
+- **[developers.infranest.io](https://developers.infranest.io/?utm_source=github&utm_medium=readme&utm_campaign=infranest-agent)** — the API, to read your servers and their metrics from your own scripts
 - **[infranest-mcp](https://github.com/InfraNest-Infrastructure-Organized/infranest-mcp)** — the MCP server, to ask your AI assistant the same
 
 You do not need an InfraNest account to read this code, and the agent is useful to look at either way: it
