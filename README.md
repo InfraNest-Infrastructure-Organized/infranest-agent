@@ -20,7 +20,7 @@
 
 ---
 
-The [InfraNest](https://infranest.io) monitoring agent. It reads a handful of numbers from the machine it
+The [InfraNest](https://infranest.io/?utm_source=github&utm_medium=readme&utm_campaign=infranest-agent) monitoring agent. It reads a handful of numbers from the machine it
 runs on and posts them to your InfraNest account.
 
 **The agent only reads, and only sends.** It reads what your server page needs, sends that to InfraNest, and
@@ -690,11 +690,11 @@ dependencies — both are checked in CI, not just asked for.
 
 ## InfraNest
 
-This agent is one piece of [InfraNest](https://infranest.io) — domains, DNS, cloud servers, certificates
+This agent is one piece of [InfraNest](https://infranest.io/?utm_source=github&utm_medium=readme&utm_campaign=infranest-agent) — domains, DNS, cloud servers, certificates
 and uptime monitoring in one place, across every provider.
 
-- **[infranest.io](https://infranest.io)** — what the platform does
-- **[infranest.io/docs](https://infranest.io/docs/)** — documentation and help centre
+- **[infranest.io](https://infranest.io/?utm_source=github&utm_medium=readme&utm_campaign=infranest-agent)** — what the platform does
+- **[infranest.io/docs](https://infranest.io/docs/?utm_source=github&utm_medium=readme&utm_campaign=infranest-agent)** — documentation and help centre
 - **[app.infranest.io](https://app.infranest.io)** — sign in
 - **[developers.infranest.io](https://developers.infranest.io)** — the API, to read your servers and their metrics from your own scripts
 - **[infranest-mcp](https://github.com/InfraNest-Infrastructure-Organized/infranest-mcp)** — the MCP server, to ask your AI assistant the same
