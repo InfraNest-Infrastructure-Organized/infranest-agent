@@ -35,7 +35,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           # From go.mod, never a literal. Pinned to '1.23' this job would have failed on the first tag —
           # go.mod says 1.24 — and a release pipeline that cannot run is discovered at the worst moment.
@@ -123,7 +123,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           # The build's exact toolchain, not go.mod's "latest 1.24": a patch release between the two jobs
           # would make every binary differ for a reason that is not a problem.
